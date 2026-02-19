@@ -1,13 +1,11 @@
 import torch
-import torchvision
 import torchvision.transforms as T
 import torchvision.datasets as dsets
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 import copy
 import csv
 import matplotlib.pyplot as plt
 import os
-from torchvision.models import resnet50
 from vulnerability import VulnerabilityAnalyzer
 from duplication import select_top_channels, apply_duplication
 from fault_injection import inject_bitflips
@@ -18,14 +16,19 @@ from model import load_resnet50_from_pth
 # Set device to GPU if available, else CPU
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-datasets_list = ["cifar10", "cifar100", "imagenet"]
+datasets_list = ["cifar10", "cifar100"]
+# datasets_list = ["imagenet"]
 bers = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4]
-n_runs = 15
+n_runs = 2
 
 def get_dataset(name, max_samples):
     transform = T.Compose([
         T.Resize(224),
         T.ToTensor(),
+        T.Normalize(
+    mean=[0.485, 0.456, 0.406],
+    std=[0.229, 0.224, 0.225]
+    )
     ])
     if name.lower() == "cifar10":
         ds_full = dsets.CIFAR10(root="./data", train=False, download=True, transform=transform)
@@ -48,10 +51,16 @@ for dname in datasets_list:
 
     print("\n===== DATASET:", dname, "=====")
 
-    loader, num_classes = get_dataset(dname, max_samples=10)
+    loader, num_classes = get_dataset(dname, max_samples=100)
 
-    model = load_resnet50_from_pth("./resnet50.pth", num_classes=num_classes).to(device)
-    
+    pth_files = {
+    "imagenet": "./resnet50.pth",
+    "cifar10": "./resnet50_cifar10.pth",      # اگر داشتی
+    "cifar100": "./resnet50_cifar100.pth"     # اگر داشتی
+    }
+
+    model = load_resnet50_from_pth(dname, pth_files).to(device)
+
     # model = resnet50()
 
     # if dname == "cifar10":
@@ -68,19 +77,33 @@ for dname in datasets_list:
     # model = model.to(device)
 
     # ---------------- Baseline ----------------
+    print("-1")
     base_top1, base_top5 = evaluate(model, loader, device)
     print("Base Top-1: ", base_top1, "Top-5: ",base_top5)
+    print("0")
 
     # ---------------- Vulnerability + Hardening ----------------
     analyzer = VulnerabilityAnalyzer(model, device)
+    print("1")
     vuln = analyzer.analyze(loader, max_batches=1)
+    print("2")
+
 
     selected = select_top_channels(vuln, 0.1)
+    print("3")
+
+    total = sum(p.abs().sum().item() for p in model.parameters())
+    print("Total weight magnitude:", total)
 
     hardened = apply_duplication(model, selected)
+    print("4")
+
     hardened.to(device)
+    print("5")
 
     # ---------------- EDAC ----------------
+    print("6")
+
     for name, module in hardened.named_modules():
         if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
             num_ch = module.out_channels if isinstance(module, torch.nn.Conv2d) else module.out_features
@@ -92,6 +115,7 @@ for dname in datasets_list:
             setattr(parent, names[-1], torch.nn.Sequential(module, EDACLayer(num_ch, duplicated_idx=dup_idx)))
 
     hardened.to(device)
+    print("7")
 
     # ---------------- CSV ----------------
     csv_file = f"results/{dname}_BER_results.csv"
