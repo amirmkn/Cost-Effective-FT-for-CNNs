@@ -6,12 +6,14 @@ import copy
 import csv
 import matplotlib.pyplot as plt
 import os
+import time
 from vulnerability import VulnerabilityAnalyzer
 from duplication import select_top_channels, apply_duplication
 from fault_injection import inject_bitflips
 from evaluation import evaluate
 from edac import EDACLayer
 from model import load_resnet50_from_pth
+from hardening import harden_resnet50,profile_model
 
 # Set device to GPU if available, else CPU
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -19,7 +21,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 datasets_list = ["cifar10", "cifar100"]
 # datasets_list = ["imagenet"]
 bers = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4]
-n_runs = 2
+n_runs = 15
+Harden_ratio = 0.15
 
 def get_dataset(name, max_samples):
     transform = T.Compose([
@@ -51,113 +54,123 @@ for dname in datasets_list:
 
     print("\n===== DATASET:", dname, "=====")
 
-    loader, num_classes = get_dataset(dname, max_samples=100)
+    loader, num_classes = get_dataset(dname, max_samples=500)
 
+    # model = load_resnet50_from_pth("./resnet50.pth", num_classes=num_classes).to(device)
+    
     pth_files = {
     "imagenet": "./resnet50.pth",
-    "cifar10": "./resnet50_cifar10.pth",      # اگر داشتی
-    "cifar100": "./resnet50_cifar100.pth"     # اگر داشتی
+    "cifar10": "./resnet50_cifar10.pth", 
+    "cifar100": "./resnet50_cifar100.pth"
     }
 
     model = load_resnet50_from_pth(dname, pth_files).to(device)
 
-    # model = resnet50()
-
-    # if dname == "cifar10":
-    #     model.fc = torch.nn.Linear(model.fc.in_features, 10)
-    #     model.load_state_dict(torch.load("resnet50_cifar10.pth"))
-
-    # elif dname == "cifar100":
-    #     model.fc = torch.nn.Linear(model.fc.in_features, 100)
-    #     model.load_state_dict(torch.load("resnet50_cifar100.pth"))
-
-    # elif dname == "imagenet":
-    #     model.load_state_dict(torch.load("resnet50.pth"))
-
-    # model = model.to(device)
-
     # ---------------- Baseline ----------------
-    print("-1")
-    base_top1, base_top5 = evaluate(model, loader, device)
-    print("Base Top-1: ", base_top1, "Top-5: ",base_top5)
-    print("0")
+    base_acc, base_top5, base_top10 = evaluate(model, loader, device)
+    print("base_acc = ",base_acc,"base_top5 = ", base_top5,"base_top10 = ", base_top10)
 
     # ---------------- Vulnerability + Hardening ----------------
     analyzer = VulnerabilityAnalyzer(model, device)
-    print("1")
+
     vuln = analyzer.analyze(loader, max_batches=1)
-    print("2")
 
+    selected = select_top_channels(vuln, Harden_ratio)
 
-    selected = select_top_channels(vuln, 0.1)
-    print("3")
+    min_dict, max_dict = profile_model(model, loader, device)
 
-    total = sum(p.abs().sum().item() for p in model.parameters())
-    print("Total weight magnitude:", total)
-
-    hardened = apply_duplication(model, selected)
-    print("4")
-
-    hardened.to(device)
-    print("5")
-
-    # ---------------- EDAC ----------------
-    print("6")
-
-    for name, module in hardened.named_modules():
-        if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
-            num_ch = module.out_channels if isinstance(module, torch.nn.Conv2d) else module.out_features
-            dup_idx = selected.get(name, []) 
-            parent = hardened
-            names = name.split('.')
-            for n in names[:-1]:
-                parent = getattr(parent, n)
-            setattr(parent, names[-1], torch.nn.Sequential(module, EDACLayer(num_ch, duplicated_idx=dup_idx)))
-
-    hardened.to(device)
-    print("7")
+    # Hardening
+    hardened_model = harden_resnet50(
+        model, vuln, min_dict, max_dict, ratio=Harden_ratio
+    ).to(device)
 
     # ---------------- CSV ----------------
     csv_file = f"results/{dname}_BER_results.csv"
 
     with open(csv_file, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["BER", "Run", "Top-1", "Top-5"])
+        writer.writerow(["BER", "Run", "Accuracy", "AccuracyDrop(%)", "Top-5", "Top-10"])
 
-        ber_means = []
-        ber_stds = []
+        top5_means, top5_stds = [], []
+        top10_means, top10_stds = [], []
+        acc_means, acc_stds = [], []
 
         for ber in bers:
 
-            accs = []
+            top5_list = []
+            top10_list = []
+            acc_list = []
+            drop_percent_list = []
 
             for run in range(n_runs):
 
-                m = copy.deepcopy(hardened)
+                m = copy.deepcopy(hardened_model)
                 inject_bitflips(m, ber)
 
-                top1, top5 = evaluate(m, loader, device)
+                acc ,top5, top10 = evaluate(m, loader, device)
+                drop_percent = 100 * (base_acc - acc)
 
-                accs.append(top1)
-                writer.writerow([ber, run+1, top1, top5])
+                acc_list.append(acc)
+                top5_list.append(top5)
+                top10_list.append(top10)
+                drop_percent_list.append(drop_percent)
 
-                print(f"{dname} | BER={ber} | Run={run+1} | Top1={top1:.4f}")
+                writer.writerow([ber, run+1, acc, drop_percent, top5, top10])
 
-            mean = sum(accs)/len(accs)
-            std = (sum([(a-mean)**2 for a in accs])/len(accs))**0.5
+                print(f"{dname} | BER={ber} | Run={run+1} | "
+                    f"Acc={acc:.4f} | Top5={top5:.4f} | "
+                    f"Top10={top10:.4f} ")
 
-            ber_means.append(mean)
-            ber_stds.append(std)
+            # ---  mean و std ---
+            def mean_std(lst):
+                mean = sum(lst)/len(lst)
+                std = (sum([(a-mean)**2 for a in lst])/len(lst))**0.5
+                return mean, std
+            
+            ma, sa = mean_std(acc_list)
+            m5, s5 = mean_std(top5_list)
+            m10, s10 = mean_std(top10_list)
 
-            print(f"BER={ber}: mean={mean:.4f}, std={std:.4f}")
+            acc_means.append(ma); acc_stds.append(sa)
+            top5_means.append(m5); top5_stds.append(s5)
+            top10_means.append(m10); top10_stds.append(s10)
 
-    # -------------- plot -----------------
-    plt.figure()
-    plt.errorbar(bers, ber_means, yerr=ber_stds, fmt='-o', capsize=5)
-    plt.xscale('log')
-    plt.xlabel("Bit Error Rate (BER)")
-    plt.ylabel("Top-1 Accuracy")
-    plt.title(f"ResNet50 Hardened - {dname}")
-    plt.grid(True)
-    plt.savefig(f"results/{dname}_BER_plot.png")
-    plt.show()
+            print(f"BER={ber}: "
+                f"Acc mean={ma:.4f}, "
+                f"Top5 mean={m5:.4f}, "
+                f"Top10 mean={m10:.4f}, "
+                )
+
+    # ------------------ Plot  ------------------
+    def plot_metric(means, stds, metric_name):
+        plt.figure()
+        plt.errorbar(bers, means, yerr=stds, fmt='-o', capsize=5)
+        plt.xscale('log')
+        plt.xlabel("Bit Error Rate (BER)")
+        plt.ylabel(metric_name)
+        plt.title(f"ResNet50 Hardened - {dname} ({metric_name})")
+        plt.grid(True)
+        plt.savefig(f"results/{dname}_{metric_name}_plot.png")
+        plt.close()
+
+
+    plot_metric(top5_means, top5_stds, "Top5")
+    plot_metric(top10_means, top10_stds, "Top10")
+    plot_metric(acc_means, acc_stds, "Accuracy")
+    plot_metric(acc_means, acc_stds, "AccuracyDrop(%)")
+
+
+def measure_time(model, loader):
+    model.eval()
+    start = time.time()
+    with torch.no_grad():
+        for x, _ in loader:
+            x = x.to(device)
+            _ = model(x)
+    return time.time() - start
+
+baseline_time = measure_time(model, loader)
+hardened_time = measure_time(hardened_model, loader)
+
+overhead_percent = 100 * (hardened_time - baseline_time) / baseline_time
+print("Performance overhead (%):", overhead_percent)
