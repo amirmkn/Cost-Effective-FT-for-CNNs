@@ -13,6 +13,14 @@ def get_parent(model, name):
         parent = getattr(parent, c)
     return parent
 
+def get_last_linear_name(model):
+    last_name = None
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            last_name = name
+    return last_name
+
+
 # =========================================================
 # 1️⃣ Channel Duplication Wrapper
 # =========================================================
@@ -159,14 +167,16 @@ def profile_model(model, loader, device):
 # 5️⃣ Hardening ResNet50 (CONV + FC)
 # =========================================================
 
-def harden_resnet50(model, vuln_dict, min_dict, max_dict, ratio=0.1):
+def harden_model(model, vuln_dict, min_dict, max_dict, ratio=0.1):
     model = copy.deepcopy(model)
+
+    last_fc_name = get_last_linear_name(model)
 
     for name, module in model.named_modules():
         if isinstance(module, (nn.Conv2d, nn.Linear)):
 
-            # همه کانال‌ها برای آخرین FC
-            if name == "fc":
+            # ✅ Paper rule: duplicate ALL neurons in last FC
+            if name == last_fc_name:
                 top_idx = list(range(module.out_features))
             else:
                 scores = torch.tensor(vuln_dict[name]["scores"])
@@ -177,7 +187,11 @@ def harden_resnet50(model, vuln_dict, min_dict, max_dict, ratio=0.1):
             child = name.split('.')[-1]
 
             dup_layer = DuplicatedLayer(module, top_idx)
-            edac_layer = EDACLayer(min_dict[name], max_dict[name], top_idx)
+            edac_layer = EDACLayer(
+                min_dict[name],
+                max_dict[name],
+                top_idx
+            )
             hardened_block = HardenedBlock(dup_layer, edac_layer)
 
             setattr(parent, child, hardened_block)

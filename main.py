@@ -12,14 +12,31 @@ from duplication import select_top_channels, apply_duplication
 from fault_injection import inject_bitflips
 from evaluation import evaluate
 from edac import EDACLayer
-from model import load_resnet50_from_pth
-from hardening import harden_resnet50,profile_model
+from model import load_resnet50_from_pth, load_alexnet, load_vgg11, load_vgg16
+from hardening import harden_model, profile_model
+
+# ================= Model selection =================
+MODEL_NAME = "resnet50"
+# MODEL_NAME = "alexnet"
+# MODEL_NAME = "vgg11"
+# MODEL_NAME = "vgg16"
 
 # Set device to GPU if available, else CPU
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-datasets_list = ["cifar10", "cifar100"]
+# datasets_list = ["cifar10", "cifar100"]
 # datasets_list = ["imagenet"]
+if MODEL_NAME == "alexnet":
+    datasets_list = ["cifar10"]
+elif MODEL_NAME == "vgg11":
+    datasets_list = ["cifar10"]
+elif MODEL_NAME == "vgg16":
+    datasets_list = ["cifar100"]
+elif MODEL_NAME == "resnet50":
+    datasets_list = ["cifar10", "cifar100"]
+else:
+    raise ValueError("Unknown MODEL_NAME")
+
 bers = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4]
 n_runs = 15
 Harden_ratio = 0.15
@@ -58,11 +75,40 @@ for dname in datasets_list:
 
     # model = load_resnet50_from_pth("./resnet50.pth", num_classes=num_classes).to(device)
     
-    pth_files = {
-    "imagenet": "./resnet50.pth",
-    "cifar10": "./resnet50_cifar10.pth", 
-    "cifar100": "./resnet50_cifar100.pth"
-    }
+    # pth_files = {
+    # "imagenet": "./resnet50.pth",
+    # "cifar10": "./resnet50_cifar10.pth", 
+    # "cifar100": "./resnet50_cifar100.pth"
+    # }
+ # ================= Load model =================
+    if MODEL_NAME == "alexnet":
+        model = load_alexnet(
+            num_classes=10,
+            pth_path="./alexnet_cifar10.pth"
+        ).to(device)
+
+    elif MODEL_NAME == "vgg11":
+        model = load_vgg11(
+            num_classes=10,
+            pth_path="./vgg11_cifar10.pth"
+        ).to(device)
+
+    elif MODEL_NAME == "vgg16":
+        model = load_vgg16(
+            num_classes=100,
+            pth_path="./vgg16_cifar100.pth"
+        ).to(device)
+
+    elif MODEL_NAME == "resnet50":
+        pth_files = {
+            "imagenet": "./resnet50.pth",
+            "cifar10": "./resnet50_cifar10.pth",
+            "cifar100": "./resnet50_cifar100.pth"
+        }
+        model = load_resnet50_from_pth(dname, pth_files).to(device)
+
+    else:
+        raise ValueError("Invalid MODEL_NAME")
 
     model = load_resnet50_from_pth(dname, pth_files).to(device)
 
@@ -80,7 +126,7 @@ for dname in datasets_list:
     min_dict, max_dict = profile_model(model, loader, device)
 
     # Hardening
-    hardened_model = harden_resnet50(
+    hardened_model = harden_model(
         model, vuln, min_dict, max_dict, ratio=Harden_ratio
     ).to(device)
 

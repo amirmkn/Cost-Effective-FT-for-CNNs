@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from torchvision.models import alexnet
+
 
 def load_resnet50_from_pth(dataset_name, pth_path_dict):
 
@@ -38,3 +40,78 @@ def load_resnet50_from_pth(dataset_name, pth_path_dict):
         raise ValueError("No weight file provided for this dataset")
 
     return model
+def load_alexnet(num_classes=10, pth_path=None):
+    """
+    AlexNet adapted for CIFAR-10 (paper baseline)
+    """
+    model = models.alexnet(weights=None)
+
+    # Adapt first conv layer for CIFAR (32x32)
+    model.features[0] = nn.Conv2d(
+        in_channels=3,
+        out_channels=64,
+        kernel_size=3,
+        stride=1,
+        padding=1
+    )
+
+    # Remove aggressive downsampling
+    model.features[2] = nn.Identity()  # remove maxpool
+    model.features[5] = nn.Identity()  # remove maxpool
+
+    # Adjust classifier
+    model.classifier = nn.Sequential(
+        nn.Dropout(),
+        nn.Linear(256 * 4 * 4, 4096),
+        nn.ReLU(inplace=True),
+        nn.Dropout(),
+        nn.Linear(4096, 4096),
+        nn.ReLU(inplace=True),
+        nn.Linear(4096, num_classes),
+    )
+
+    if pth_path is not None:
+        state = torch.load(pth_path, map_location="cpu")
+        model.load_state_dict(state)
+
+    return model
+def load_vgg11(num_classes=10, pth_path=None):
+    model = models.vgg11(weights=None)
+
+    # Adapt classifier for CIFAR
+    model.classifier = nn.Sequential(
+        nn.Linear(512, 4096),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(4096, 4096),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(4096, num_classes),
+    )
+
+    if pth_path is not None:
+        state = torch.load(pth_path, map_location="cpu")
+        model.load_state_dict(state)
+
+    return model
+
+def load_vgg16(num_classes=100, pth_path=None):
+    model = models.vgg16(weights=None)
+
+    model.classifier = nn.Sequential(
+        nn.Linear(512, 4096),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(4096, 4096),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(4096, num_classes),
+    )
+
+    if pth_path is not None:
+        state = torch.load(pth_path, map_location="cpu")
+        model.load_state_dict(state)
+
+    return model
+
+
