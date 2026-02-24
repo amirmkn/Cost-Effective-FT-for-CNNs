@@ -3,12 +3,50 @@ import torch.nn as nn
 import torchvision.models as models
 from torchvision.models import alexnet
 
+class AlexNetCIFAR(nn.Module):
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, 2),
+
+            nn.Conv2d(64, 192, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, 2),
+
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, 2)
+        )
+
+        # ✅ CIFAR‑10 feature map size: 256 × 4 × 4 = 4096
+        self.classifier = nn.Sequential(
+            nn.Linear(256 * 4 * 4, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        return self.classifier(x)
+
 
 def load_resnet50_from_pth(dataset_name, pth_path_dict):
 
     dataset_name = dataset_name.lower()
 
-    # تعیین تعداد کلاس
     if dataset_name == "imagenet":
         num_classes = 1000
     elif dataset_name == "cifar10":
@@ -18,10 +56,8 @@ def load_resnet50_from_pth(dataset_name, pth_path_dict):
     else:
         raise ValueError("Unknown dataset")
 
-    # ساخت مدل پایه
     model = models.resnet50(weights=None)
 
-    # اگر برای این دیتاست فایل جدا داری
     if dataset_name in pth_path_dict:
         pth_path = pth_path_dict[dataset_name]
         state = torch.load(pth_path, map_location="cpu")
@@ -31,7 +67,6 @@ def load_resnet50_from_pth(dataset_name, pth_path_dict):
         model.fc = nn.Linear(model.fc.in_features, saved_classes)
         model.load_state_dict(state)
 
-        # اگر کلاس‌ها متفاوت بود (مثلاً ImageNet weight روی CIFAR)
         if saved_classes != num_classes:
             print(f"Replacing FC layer: {saved_classes} → {num_classes}")
             model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -40,41 +75,13 @@ def load_resnet50_from_pth(dataset_name, pth_path_dict):
         raise ValueError("No weight file provided for this dataset")
 
     return model
+
 def load_alexnet(num_classes=10, pth_path=None):
-    """
-    AlexNet adapted for CIFAR-10 (paper baseline)
-    """
-    model = models.alexnet(weights=None)
-
-    # Adapt first conv layer for CIFAR (32x32)
-    model.features[0] = nn.Conv2d(
-        in_channels=3,
-        out_channels=64,
-        kernel_size=3,
-        stride=1,
-        padding=1
-    )
-
-    # Remove aggressive downsampling
-    model.features[2] = nn.Identity()  # remove maxpool
-    model.features[5] = nn.Identity()  # remove maxpool
-
-    # Adjust classifier
-    model.classifier = nn.Sequential(
-        nn.Dropout(),
-        nn.Linear(256 * 4 * 4, 4096),
-        nn.ReLU(inplace=True),
-        nn.Dropout(),
-        nn.Linear(4096, 4096),
-        nn.ReLU(inplace=True),
-        nn.Linear(4096, num_classes),
-    )
-
-    if pth_path is not None:
-        state = torch.load(pth_path, map_location="cpu")
-        model.load_state_dict(state)
-
+    model = AlexNetCIFAR(num_classes)
+    if pth_path:
+        model.load_state_dict(torch.load(pth_path, map_location="cpu"))
     return model
+
 def load_vgg11(num_classes=10, pth_path=None):
     model = models.vgg11(weights=None)
 
