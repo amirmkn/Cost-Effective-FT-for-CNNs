@@ -20,7 +20,6 @@ def get_last_linear_name(model):
             last_name = name
     return last_name
 
-
 # =========================================================
 # 1️⃣ Channel Duplication Wrapper
 # =========================================================
@@ -192,6 +191,51 @@ def harden_model(model, vuln_dict, min_dict, max_dict, ratio=0.1):
                 max_dict[name],
                 top_idx
             )
+            hardened_block = HardenedBlock(dup_layer, edac_layer)
+
+            setattr(parent, child, hardened_block)
+
+    return model
+
+
+# =========================================================
+# Hardened model (pruning-aware)
+# =========================================================
+def harden_model_pruned(model, vuln_dict, min_dict, max_dict, ratio=0.1, pruned_idx_dict=None):
+    """
+    Harden a pruned CNN with selective duplication + EDAC.
+    """
+    model = copy.deepcopy(model)
+    last_fc_name = get_last_linear_name(model)
+
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+
+            # Remaining channels after pruning
+            remaining_idx = pruned_idx_dict[name] if pruned_idx_dict and name in pruned_idx_dict else None
+
+            # Duplicate all neurons in last FC
+            if name == last_fc_name:
+                top_idx = remaining_idx if remaining_idx is not None else list(range(module.out_features))
+            else:
+                scores = torch.tensor(vuln_dict[name]["scores"])
+                if remaining_idx is not None:
+                    scores = scores[remaining_idx]
+                k = max(1, int(len(scores)*ratio))
+                top_idx_local = torch.topk(scores, k).indices.tolist()
+                if remaining_idx is not None:
+                    top_idx = [remaining_idx[i] for i in top_idx_local]
+                else:
+                    top_idx = top_idx_local
+
+                # ⚠️ Ensure indices do not exceed current channel count
+                top_idx = [i for i in top_idx if i < module.out_channels]
+
+            parent = get_parent(model, name)
+            child = name.split('.')[-1]
+
+            dup_layer = DuplicatedLayer(module, top_idx)
+            edac_layer = EDACLayer(min_dict[name], max_dict[name], top_idx)
             hardened_block = HardenedBlock(dup_layer, edac_layer)
 
             setattr(parent, child, hardened_block)
