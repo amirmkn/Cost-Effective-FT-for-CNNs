@@ -49,7 +49,7 @@ def measure_time(model, loader, device):
     start = time.time()
     with torch.no_grad():
         for x, _ in loader:
-            x = x.to(device)
+            x = x.to(device, non_blocking = True)
             _ = model(x)
     torch.cuda.synchronize() if device == "cuda" else None
     return time.time() - start
@@ -97,7 +97,7 @@ def get_dataset(name, max_samples = None):
             range(min(max_samples, len(ds_full)))
         )
 
-    loader = DataLoader(ds, batch_size=64, shuffle=False)
+    loader = DataLoader(ds, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
     
     return loader, num_classes
 
@@ -107,7 +107,7 @@ for dname in datasets_list:
 
     print("\n===== DATASET:", dname, "=====")
 
-    loader, num_classes = get_dataset(dname, max_samples=500)
+    loader, num_classes = get_dataset(dname, max_samples = 10)
 
  # Load model
     if MODEL_NAME == "alexnet":
@@ -206,7 +206,6 @@ for dname in datasets_list:
                 drop_percent_list.append(drop_percent)
 
                 writer.writerow([ber, run+1, acc, drop_percent, top5, top10])
-                f.flush() # flush after each run
 
                 print(f"{dname} | BER={ber} | Run={run+1} | "
                     f"Acc={acc:.4f} | Top5={top5:.4f} | "
