@@ -15,6 +15,7 @@ from edac import EDACLayer
 from model import load_resnet50_from_pth, load_alexnet, load_vgg11, load_vgg16
 from hardening import harden_model, profile_model , harden_model_pruned 
 from pruning import pruning_model,lightweight_retraining
+
 def main():
     # ================= Model selection =================
     MODEL_NAME = "resnet50"
@@ -38,7 +39,7 @@ def main():
     else:
         raise ValueError("Unknown MODEL_NAME")
 
-    bers = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4] # BERs to test
+    # bers = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4] # BERs to test
     bers = [1e-6, 1e-5, 1e-4, 1e-3] # BERs Based on the IEEE paper
     n_runs = 15
     Harden_ratio = 0.15
@@ -111,23 +112,23 @@ def main():
         loader, num_classes = get_dataset(dname, max_samples = 10)
 
     # Load model
-        # if MODEL_NAME == "alexnet":
-        #     model = load_alexnet(
-        #         num_classes=10,
-        #         pth_path="./alexnet_cifar10.pth"
-        #     ).to(device)
+        if MODEL_NAME == "alexnet":
+            model = load_alexnet(
+                num_classes=10,
+                pth_path="./alexnet_cifar10.pth"
+            ).to(device)
 
-        # elif MODEL_NAME == "vgg11":
-        #     model = load_vgg11(
-        #         num_classes=10,
-        #         pth_path="./vgg11_cifar10.pth"
-        #     ).to(device)
+        elif MODEL_NAME == "vgg11":
+            model = load_vgg11(
+                num_classes=10,
+                pth_path="./vgg11_cifar10.pth"
+            ).to(device)
 
-        # elif MODEL_NAME == "vgg16":
-        #     model = load_vgg16(
-        #         num_classes=100,
-        #         pth_path="./vgg16_cifar100.pth"
-        #     ).to(device)
+        elif MODEL_NAME == "vgg16":
+            model = load_vgg16(
+                num_classes=100,
+                pth_path="./vgg16_cifar100.pth"
+            ).to(device)
 
         if MODEL_NAME == "resnet50":
             pth_files = {
@@ -183,7 +184,7 @@ def main():
             fc_prune_ratios   = pruning_ratios_dict[(MODEL_NAME, dname)]["fc"]
 
         pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios)
-        print("start retraing...")
+        print("start retraining...")
         pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=1)
         print("start hardening...")
         min_dict, max_dict = profile_model(pruned_model, loader, device)
