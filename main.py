@@ -8,11 +8,9 @@ import matplotlib.pyplot as plt
 import os
 import time
 from vulnerability import VulnerabilityAnalyzer
-from duplication import select_top_channels
 from fault_injection import inject_bitflips
 from evaluation import evaluate
-from edac import EDACLayer
-from model import load_resnet50_from_pth, load_alexnet, load_vgg11, load_vgg16
+from model import load_resnet50, load_alexnet, load_vgg11, load_vgg16
 from hardening import harden_model, profile_model , harden_model_pruned 
 from pruning import pruning_model,lightweight_retraining
 
@@ -109,7 +107,7 @@ def main():
 
         print("\n===== DATASET:", dname, "=====")
 
-        loader, num_classes = get_dataset(dname, max_samples = 10)
+        loader, num_classes = get_dataset(dname, max_samples = None)
 
     # Load model
         if MODEL_NAME == "alexnet":
@@ -132,11 +130,11 @@ def main():
 
         if MODEL_NAME == "resnet50":
             pth_files = {
-                "imagenet": "./resnet50.pth",
+                "imagenet": "./resnet50_imagenet.pth",
                 "cifar10": "./resnet50_cifar10.pth",
                 "cifar100": "./resnet50_cifar100.pth"
             }
-            model = load_resnet50_from_pth(dname, pth_files).to(device)
+            model = load_resnet50(dname, pth_files).to(device)
 
         else:
             raise ValueError("Invalid MODEL_NAME")
@@ -152,7 +150,6 @@ def main():
 
         vuln = analyzer.analyze(loader, max_batches=30)
         print ("start pruning...")
-        selected = select_top_channels(vuln, Harden_ratio)
         pruning_ratios_dict = {
             # AlexNet
             ("alexnet", "cifar10"): {

@@ -43,36 +43,58 @@ class AlexNetCIFAR(nn.Module):
         return self.classifier(x)
 
 
-def load_resnet50_from_pth(dataset_name, pth_path_dict):
+import torch
+import torch.nn as nn
+import torchvision.models as models
+from torchvision.models import ResNet50_Weights
 
-    dataset_name = dataset_name.lower()
+def load_resnet50(num_classes=None, pth_path=None, is_tiny=False):
+    """
+    Loads ResNet50 with flexible class counts and weight sources.
+    
+    Args:
+        num_classes: Target number of output classes. 
+                     Defaults to 200 (Tiny) or 1000 (Standard) if None.
+        pth_path: Local path to .pth file. If None and weights are needed, 
+                  downloads default ImageNet weights.
+        is_tiny: If True, modifies architecture for 64x64 input.
+    """
+    
+    # 1. Handle default class counts
+    if num_classes is None:
+        num_classes = 200 if is_tiny else 1000
 
-    if dataset_name == "imagenet":
-        num_classes = 1000
-    elif dataset_name == "cifar10":
-        num_classes = 10
-    elif dataset_name == "cifar100":
-        num_classes = 100
+    # 2. Initialize Model
+    # If no local path is provided, we can download official pre-trained weights
+    if pth_path is None:
+        print("No local path provided. Downloading/Loading official ImageNet weights...")
+        weights = ResNet50_Weights.IMAGENET1K_V1
+        model = models.resnet50(weights=weights)
     else:
-        raise ValueError("Unknown dataset")
-
-    model = models.resnet50(weights=None)
-
-    if dataset_name in pth_path_dict:
-        pth_path = pth_path_dict[dataset_name]
+        print(f"Loading weights from local path: {pth_path}")
+        model = models.resnet50(weights=None)
         state = torch.load(pth_path, map_location="cpu")
         
+        # Adjust FC layer to match the checkpoint being loaded
         saved_classes = state["fc.weight"].shape[0]
-        
         model.fc = nn.Linear(model.fc.in_features, saved_classes)
         model.load_state_dict(state)
 
-        if saved_classes != num_classes:
-            print(f"Replacing FC layer: {saved_classes} → {num_classes}")
-            model.fc = nn.Linear(model.fc.in_features, num_classes)
+    # 3. Tiny-ImageNet Architecture Tweak
+    # Standard ResNet50 downsamples 224->56 in the first two layers.
+    # For 64x64, we prevent it from shrinking the image too much.
+    if is_tiny:
+        print("Modifying ResNet50 layers for Tiny-ImageNet (64x64 resolution)")
+        # Change first conv: smaller kernel/stride to preserve pixels
+        model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        # Remove initial maxpool to keep spatial resolution higher for deeper layers
+        model.maxpool = nn.Identity()
 
-    else:
-        raise ValueError("No weight file provided for this dataset")
+    # 4. Final Class Adjustment
+    # If the current model classes (from weights) don't match our target, swap FC
+    if model.fc.out_features != num_classes:
+        print(f"Adjusting FC layer: {model.fc.out_features} -> {num_classes}")
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
 
     return model
 
