@@ -14,6 +14,30 @@ from hardening import harden_model, profile_model , harden_model_pruned
 from pruning import pruning_model,lightweight_retraining, rebuild_first_fc
 from plotting import plot_single_model_metric, plot_baseline_vs_pruned, plot_pareto_overhead_vs_accuracy
 
+def get_timing_loader(loader, max_batches=10):
+    batches = []
+    for i, batch in enumerate(loader):
+        batches.append(batch)
+        if i + 1 >= max_batches:
+            break
+    return batches
+
+def measure_time(model, timing_batches, device, runs=5):
+    model.eval()
+    times = []
+
+    with torch.no_grad():
+        for _ in range(runs):
+            start = time.time()
+            for images, labels in timing_batches:
+                images = images.to(device)
+                _ = model(images)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            times.append(time.time() - start)
+
+    return sum(times) / len(times)
+
 def main():
     # ================= Model selection =================
     # MODEL_NAME = "resnet50"
@@ -41,18 +65,6 @@ def main():
     bers = [1e-6, 1e-5, 1e-4, 1e-3] # BERs Based on the IEEE paper
     n_runs = 15
     Harden_ratio = 0.15
-
-    def measure_time(model, loader, device):
-        """Measure total inference time over one full pass of the dataloader."""
-        model.eval()
-        torch.cuda.synchronize() if device == "cuda" else None
-        start = time.time()
-        with torch.no_grad():
-            for x, _ in loader:
-                x = x.to(device, non_blocking = True)
-                _ = model(x)
-        torch.cuda.synchronize() if device == "cuda" else None
-        return time.time() - start
     
     def get_dataset(name, max_samples = None):
         # Set resize value based on the model being used
@@ -107,7 +119,7 @@ def main():
 
         print("\n===== DATASET:", dname, "=====")
 
-        loader, num_classes = get_dataset(dname, max_samples = 1)
+        loader, num_classes = get_dataset(dname, max_samples = None)
 
     # Load model
         if MODEL_NAME == "alexnet":
@@ -141,13 +153,13 @@ def main():
 
 
         # Baseline
-        base_resut = evaluate(model, loader, device)
-        print("base_acc = ",base_resut["accuracy"],
-              "base_top5 = ", base_resut["top5"],
-              "base_top10 = ", base_resut["top10"],
-              "base_precision = " , base_resut["precision"],
-              "base_recall = " , base_resut["recall"],
-              "base_f1_score = " , base_resut["f1_score"],
+        accuracy, top_5, top_10, precision, recall, f1_score = evaluate(model, loader, device)
+        print("base_acc = ",accuracy,
+              "base_top5 = ", top_5,
+              "base_top10 = ", top_10,
+              "base_precision = " , precision,
+              "base_recall = " , recall,
+              "base_f1_score = " , f1_score,
               )
 
         # Vulnerability + Hardening 
@@ -200,7 +212,7 @@ def main():
         print("start retraining...")
         if MODEL_NAME in ["alexnet", "vgg11", "vgg16"]:
             pruned_model = rebuild_first_fc(pruned_model, input_size=(3,32,32), device=device)
-        pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=1)
+        pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=10)
         min_dict, max_dict = profile_model(pruned_model, loader, device)
 
         print("start hardening...")
@@ -209,9 +221,11 @@ def main():
         
         # Measure performance overhead
         print("\n=== Measuring Performance Overhead ===")
-        baseline_time = measure_time(model, loader, device)
-        hardened_base_time = measure_time(hardened_baseline, loader, device)
-        hardened_pruned_time = measure_time(hardened_model, loader, device)
+        timing_batches = get_timing_loader(loader, max_batches=10)
+
+        baseline_time = measure_time(model, timing_batches, device)
+        hardened_base_time = measure_time(hardened_baseline, timing_batches, device)
+        hardened_pruned_time = measure_time(hardened_model, timing_batches, device)
         
         overhead_base = 100 * (hardened_base_time - baseline_time) / baseline_time
         overhead_pruned = 100 * (hardened_pruned_time - baseline_time) / baseline_time
@@ -257,31 +271,24 @@ def main():
                     #Hardened baseline
                     m_base = copy.deepcopy(hardened_baseline)
                     inject_bitflips(m_base, ber)
-                    result_justHardening= evaluate(m_base, loader, device)
-                    drop_base = 100 * (base_resut["accuracy"] - result_justHardening["accuracy"])
-                    drops_baseline.append(drop_base)
+                    accuracy, _, _, _, _, _ = evaluate(m_base, loader, device)
+                    
                     #Hardened pruned
                     m_pruned = copy.deepcopy(hardened_model)
                     inject_bitflips(m_pruned, ber)
-                    result = evaluate(m_pruned, loader, device)
-                    acc = result["accuracy"]
-                    top5 = result["top5"]
-                    top10 = result["top10"]
-                    precision = result["precision"]
-                    recall = result["recall"]
-                    f1 = result["f1_score"]
-                    drop_pruned = 100 * (base_resut["accuracy"] - acc)
+                    accuracy_pruned, top_5, top_10, precision, recall, f1 = evaluate(m_pruned, loader, device)
+                    drop_pruned = 100 * (accuracy - accuracy_pruned)
                     drops_pruned.append(drop_pruned)
-                    acc_list.append(acc)
-                    top5_list.append(top5)
-                    top10_list.append(top10)
+                    acc_list.append(accuracy_pruned)
+                    top5_list.append(top_5)
+                    top10_list.append(top_10)
                     drop_percent_list.append(drop_pruned)
 
-                    writer.writerow([ber, run+1, acc, drop_pruned, top5, top10, precision, recall, f1])
+                    writer.writerow([ber, run+1, accuracy, drop_pruned, top_5, top_10, precision, recall, f1])
 
                     print(f"{dname} | BER={ber:.0e} | Run={run+1} | "
-                        f"Acc={acc:.4f} | Top5={top5:.4f} | "
-                        f"Top10={top10:.4f} | F1={f1:.4f} | "
+                        f"Acc={accuracy:.4f} | Top5={top_5:.4f} | "
+                        f"Top10={top_10:.4f} | F1={f1:.4f} | "
                         f"Drop={drop_pruned:.2f}%")
 
                 # ---- store means for plotting ----

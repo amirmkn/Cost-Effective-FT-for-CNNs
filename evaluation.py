@@ -48,11 +48,4 @@ def evaluate(model, loader, device):
         zero_division=0
     )
 
-    return {
-        "accuracy": top1_acc,
-        "top5": top5_acc,
-        "top10": top10_acc,
-        "precision": precision,
-        "recall": recall,
-        "f1_score": f1
-    }
+    return top1_acc, top5_acc, top10_acc, precision, recall, f1
