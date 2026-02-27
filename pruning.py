@@ -5,6 +5,19 @@ import copy
 from torchvision.models.resnet import BasicBlock, Bottleneck
 
 # ================= Utility =================
+def rebuild_first_fc(model, input_size=(3, 32, 32), device='cuda'):
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, *input_size).to(device)
+            feat = model.features(dummy)
+            flat_dim = feat.view(1, -1).size(1)
+
+        old_fc = model.classifier[0]
+        new_fc = nn.Linear(flat_dim, old_fc.out_features).to(device)
+
+        model.classifier[0] = new_fc
+        return model
+
 def get_parent(model, name):
     components = name.split(".")
     parent = model
@@ -157,21 +170,6 @@ def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios):
             #     pruned_idx_dict[name] = keep_idx
 
         return model, pruned_idx_dict
-    
-def rebuild_first_fc(model, input_size=(3, 32, 32), device='cuda'):
-        model.eval()
-        with torch.no_grad():
-            dummy = torch.zeros(1, *input_size).to(device)
-            feat = model.features(dummy)
-            flat_dim = feat.view(1, -1).size(1)
-
-        old_fc = model.classifier[0]
-        new_fc = nn.Linear(flat_dim, old_fc.out_features).to(device)
-
-        model.classifier[0] = new_fc
-        return model
-
-
 # ================= Lightweight Retraining =================
 def lightweight_retraining(model, train_loader, device='cuda', epochs=10, lr=0.001):
     model = model.to(device)
