@@ -135,28 +135,42 @@ def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios):
                 prev_keep_idx = keep_idx
                 pruned_idx_dict[name] = keep_idx
 
-            elif isinstance(module, nn.Linear):
-                scores = torch.tensor(vuln_dict[name]["scores"])
-                prune_ratio = fc_prune_ratios[min(fc_idx, len(fc_prune_ratios)-1)]
-                keep_k = max(1, int(len(scores)*(1-prune_ratio)))
-                keep_idx = torch.topk(scores, keep_k).indices.tolist()
-                fc_idx += 1
+            # elif isinstance(module, nn.Linear):
+            #     scores = torch.tensor(vuln_dict[name]["scores"])
+            #     prune_ratio = fc_prune_ratios[min(fc_idx, len(fc_prune_ratios)-1)]
+            #     keep_k = max(1, int(len(scores)*(1-prune_ratio)))
+            #     keep_idx = torch.topk(scores, keep_k).indices.tolist()
+            #     fc_idx += 1
 
-                parent = get_parent(model, name)
-                child_name = name.split('.')[-1]
+            #     parent = get_parent(model, name)
+            #     child_name = name.split('.')[-1]
 
-                in_features = module.in_features if prev_keep_idx is None else len(prev_keep_idx)
-                new_fc = nn.Linear(in_features, len(keep_idx), bias=(module.bias is not None))
-                if prev_keep_idx is None:
-                    new_fc.weight.data = module.weight.data[keep_idx].clone()
-                else:
-                    new_fc.weight.data = module.weight.data[keep_idx][:, prev_keep_idx].clone()
-                if module.bias is not None:
-                    new_fc.bias.data = module.bias.data[keep_idx].clone()
-                setattr(parent, child_name, new_fc)
-                pruned_idx_dict[name] = keep_idx
+            #     in_features = module.in_features if prev_keep_idx is None else len(prev_keep_idx)
+            #     new_fc = nn.Linear(in_features, len(keep_idx), bias=(module.bias is not None))
+            #     if prev_keep_idx is None:
+            #         new_fc.weight.data = module.weight.data[keep_idx].clone()
+            #     else:
+            #         new_fc.weight.data = module.weight.data[keep_idx][:, prev_keep_idx].clone()
+            #     if module.bias is not None:
+            #         new_fc.bias.data = module.bias.data[keep_idx].clone()
+            #     setattr(parent, child_name, new_fc)
+            #     pruned_idx_dict[name] = keep_idx
 
         return model, pruned_idx_dict
+    
+def rebuild_first_fc(model, input_size=(3, 32, 32), device='cuda'):
+        model.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, *input_size).to(device)
+            feat = model.features(dummy)
+            flat_dim = feat.view(1, -1).size(1)
+
+        old_fc = model.classifier[0]
+        new_fc = nn.Linear(flat_dim, old_fc.out_features).to(device)
+
+        model.classifier[0] = new_fc
+        return model
+
 
 # ================= Lightweight Retraining =================
 def lightweight_retraining(model, train_loader, device='cuda', epochs=10, lr=0.001):

@@ -4,7 +4,6 @@ import torchvision.datasets as dsets
 from torch.utils.data import DataLoader
 import copy
 import csv
-import matplotlib.pyplot as plt
 import os
 import time
 from vulnerability import VulnerabilityAnalyzer
@@ -12,7 +11,7 @@ from fault_injection import inject_bitflips
 from evaluation import evaluate
 from model import load_resnet50, load_alexnet, load_vgg11, load_vgg16
 from hardening import harden_model, profile_model , harden_model_pruned 
-from pruning import pruning_model,lightweight_retraining
+from pruning import pruning_model,lightweight_retraining, rebuild_first_fc
 from plotting import plot_single_model_metric, plot_baseline_vs_pruned, plot_pareto_overhead_vs_accuracy
 
 def main():
@@ -198,6 +197,8 @@ def main():
             fc_prune_ratios   = pruning_ratios_dict[(MODEL_NAME, dname)]["fc"]
 
         pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios)
+        if MODEL_NAME in ["alexnet", "vgg11", "vgg16"]:
+            pruned_model = rebuild_first_fc(pruned_model, input_size=(3,32,32), device=device)
         print("start retraining...")
         pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=1)
         min_dict, max_dict = profile_model(pruned_model, loader, device)
