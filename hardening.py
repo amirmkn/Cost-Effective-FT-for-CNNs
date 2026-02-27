@@ -228,8 +228,14 @@ def harden_model_pruned(model, vuln_dict, min_dict, max_dict, ratio=0.1, pruned_
                 else:
                     top_idx = top_idx_local
 
-                # ⚠️ Ensure indices do not exceed current channel count
-                top_idx = [i for i in top_idx if i < module.out_channels]
+                if isinstance(module, nn.Conv2d):
+                    max_dim = module.out_channels
+                elif isinstance(module, nn.Linear):
+                    max_dim = module.out_features
+                else:
+                    continue  # safety
+
+                top_idx = [i for i in top_idx if i < max_dim]
 
             parent = get_parent(model, name)
             child = name.split('.')[-1]
