@@ -110,7 +110,7 @@ def main():
 
         loader, num_classes = get_dataset(dname, max_samples = None)
 
-    # Load model
+        # Load model
         if MODEL_NAME == "alexnet":
             model = load_alexnet(
                 num_classes=10,
@@ -129,7 +129,7 @@ def main():
                 pth_path="./vgg16_cifar100.pth"
             ).to(device)
 
-        if MODEL_NAME == "resnet50":
+        elif MODEL_NAME == "resnet50":
             pth_files = {
                 "imagenet": "./resnet50_tiny_best.pth",
                 "cifar10": "./resnet50_cifar10.pth",
@@ -142,7 +142,7 @@ def main():
 
 
         # Baseline
-        base_acc, base_top5, base_top10 = evaluate(model, loader, device)
+        base_acc, base_top5, base_top10, _, _, _ = evaluate(model, loader, device)
         print("base_acc = ",base_acc,"base_top5 = ", base_top5,"base_top10 = ", base_top10)
 
         # Vulnerability + Hardening 
