@@ -53,7 +53,7 @@ def main():
                 _ = model(x)
         torch.cuda.synchronize() if device == "cuda" else None
         return time.time() - start
-
+    
     def get_dataset(name, max_samples = None):
         # Set resize value based on the model being used
         # AlexNet (CIFAR version) needs 32. ResNet50/VGG typically use 224.
@@ -107,9 +107,9 @@ def main():
 
         print("\n===== DATASET:", dname, "=====")
 
-        loader, num_classes = get_dataset(dname, max_samples = None)
+        loader, num_classes = get_dataset(dname, max_samples = 1)
 
-        # Load model
+    # Load model
         if MODEL_NAME == "alexnet":
             model = load_alexnet(
                 num_classes=10,
@@ -130,19 +130,25 @@ def main():
 
         elif MODEL_NAME == "resnet50":
             pth_files = {
-                "imagenet": "./resnet50_tiny_best.pth",
+                "tiny_imagenet": "./resnet50_tiny_best.pth",
                 "cifar10": "./resnet50_cifar10.pth",
                 "cifar100": "./resnet50_cifar100.pth"
             }
-            model = load_resnet50(dname, pth_files).to(device)
+            model = load_resnet50(num_classes=num_classes,pth_path=pth_files[dname],is_tiny=(dname == "tiny_imagenet")).to(device)
 
         else:
             raise ValueError("Invalid MODEL_NAME")
 
 
         # Baseline
-        base_acc, base_top5, base_top10, _, _, _ = evaluate(model, loader, device)
-        print("base_acc = ",base_acc,"base_top5 = ", base_top5,"base_top10 = ", base_top10)
+        base_resut = evaluate(model, loader, device)
+        print("base_acc = ",base_resut["accuracy"],
+              "base_top5 = ", base_resut["top5"],
+              "base_top10 = ", base_resut["top10"],
+              "base_precision = " , base_resut["precision"],
+              "base_recall = " , base_resut["recall"],
+              "base_f1_score = " , base_resut["f1_score"],
+              )
 
         # Vulnerability + Hardening 
         print("start analyzing...")
@@ -153,13 +159,7 @@ def main():
         min_dict, max_dict = profile_model(model, loader, device)
 
         print("start calculating Hardened Baseline")
-        hardened_baseline = harden_model(
-            model,
-            vuln,
-            min_dict,
-            max_dict,
-            ratio=Harden_ratio
-        ).to(device)
+        hardened_baseline = harden_model(model,vuln,min_dict,max_dict,ratio=Harden_ratio).to(device)
 
         print ("start pruning...")
         pruning_ratios_dict = {
@@ -197,9 +197,9 @@ def main():
             fc_prune_ratios   = pruning_ratios_dict[(MODEL_NAME, dname)]["fc"]
 
         pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios)
+        print("start retraining...")
         if MODEL_NAME in ["alexnet", "vgg11", "vgg16"]:
             pruned_model = rebuild_first_fc(pruned_model, input_size=(3,32,32), device=device)
-        print("start retraining...")
         pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=1)
         min_dict, max_dict = profile_model(pruned_model, loader, device)
 
@@ -257,25 +257,32 @@ def main():
                     #Hardened baseline
                     m_base = copy.deepcopy(hardened_baseline)
                     inject_bitflips(m_base, ber)
-                    accuracy_base, _, _, _, _, _ = evaluate(m_base, loader, device)
-                    drop_base = 100 * (base_acc - accuracy_base)
+                    result_justHardening= evaluate(m_base, loader, device)
+                    drop_base = 100 * (base_resut["accuracy"] - result_justHardening["accuracy"])
                     drops_baseline.append(drop_base)
                     #Hardened pruned
                     m_pruned = copy.deepcopy(hardened_model)
                     inject_bitflips(m_pruned, ber)
-                    accuracy_pruned, top5, top10, precision, recall, f1 = evaluate(m_pruned, loader, device)
-                    drop_pruned = 100 * (base_acc - accuracy_pruned)
+                    result = evaluate(m_pruned, loader, device)
+                    acc = result["accuracy"]
+                    top5 = result["top5"]
+                    top10 = result["top10"]
+                    precision = result["precision"]
+                    recall = result["recall"]
+                    f1 = result["f1_score"]
+                    drop_pruned = 100 * (base_resut["accuracy"] - acc)
                     drops_pruned.append(drop_pruned)
-                    acc_list.append(accuracy_pruned)
+                    acc_list.append(acc)
                     top5_list.append(top5)
                     top10_list.append(top10)
                     drop_percent_list.append(drop_pruned)
 
-                    writer.writerow([ber, run+1, accuracy_pruned, drop_pruned, top5, top10, precision, recall, f1])
+                    writer.writerow([ber, run+1, acc, drop_pruned, top5, top10, precision, recall, f1])
 
-                    print(f"{dname} | BER={ber} | Run={run+1} | "
-                        f"Acc={accuracy_pruned:.4f} | Top5={top5:.4f} | "
-                        f"Top10={top10:.4f} | F1={f1:.4f} | Drop={drop_pruned:.2f}%")
+                    print(f"{dname} | BER={ber:.0e} | Run={run+1} | "
+                        f"Acc={acc:.4f} | Top5={top5:.4f} | "
+                        f"Top10={top10:.4f} | F1={f1:.4f} | "
+                        f"Drop={drop_pruned:.2f}%")
 
                 # ---- store means for plotting ----
                 drop_baseline_means.append(sum(drops_baseline) / len(drops_baseline))
