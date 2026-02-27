@@ -13,11 +13,12 @@ from evaluation import evaluate
 from model import load_resnet50, load_alexnet, load_vgg11, load_vgg16
 from hardening import harden_model, profile_model , harden_model_pruned 
 from pruning import pruning_model,lightweight_retraining
+from plotting import plot_single_model_metric, plot_baseline_vs_pruned, plot_pareto_overhead_vs_accuracy
 
 def main():
     # ================= Model selection =================
-    MODEL_NAME = "resnet50"
-    # MODEL_NAME = "alexnet"
+    # MODEL_NAME = "resnet50"
+    MODEL_NAME = "alexnet"
     # MODEL_NAME = "vgg11"
     # MODEL_NAME = "vgg16"
 
@@ -33,7 +34,7 @@ def main():
     elif MODEL_NAME == "vgg16":
         datasets_list = ["cifar100"]
     elif MODEL_NAME == "resnet50":
-        datasets_list = ["cifar10", "cifar100"]
+        datasets_list = ["cifar10", "cifar100","tiny_imagenet"]
     else:
         raise ValueError("Unknown MODEL_NAME")
 
@@ -82,9 +83,9 @@ def main():
             ])
             ds_full = dsets.CIFAR100(root="./data", train=False, download=True, transform=transform)
             num_classes = 100
-        elif name.lower() == "imagenet":
-            ds_full = dsets.ImageNet(root="./data/imagenet", split='val', download=False, transform=transform)
-            num_classes = 1000
+        elif name.lower() == "tiny_imagenet":
+            ds_full = dsets.ImageNet(root="./data/tiny-imagenet-200", split='val', download=False, transform=transform)
+            num_classes = 200
         else:
             raise ValueError("Unknown dataset")
         
@@ -130,7 +131,7 @@ def main():
 
         if MODEL_NAME == "resnet50":
             pth_files = {
-                "imagenet": "./resnet50_imagenet.pth",
+                "imagenet": "./resnet50_tiny_best.pth",
                 "cifar10": "./resnet50_cifar10.pth",
                 "cifar100": "./resnet50_cifar100.pth"
             }
@@ -149,6 +150,18 @@ def main():
         analyzer = VulnerabilityAnalyzer(model, device)
 
         vuln = analyzer.analyze(loader, max_batches=30)
+        # ===== Profiling original model =====
+        min_dict, max_dict = profile_model(model, loader, device)
+
+        print("start calculating Hardened Baseline")
+        hardened_baseline = harden_model(
+            model,
+            vuln,
+            min_dict,
+            max_dict,
+            ratio=Harden_ratio
+        ).to(device)
+
         print ("start pruning...")
         pruning_ratios_dict = {
             # AlexNet
@@ -171,6 +184,10 @@ def main():
                 "conv": [0.05]*16,  # 16 لایه کانولوشن اصلی
                 "fc":   [0.8]       # 1 لایه FC آخر
             },
+            ("resnet50", "tiny_imagenet"): {
+                "conv": [0.02]*16,
+                "fc":   [0.10]
+            },
             ("resnet50", "cifar100"): {
                 "conv": [0.04]*16,  # 16 لایه کانولوشن اصلی
                 "fc":   [0.35]      # 1 لایه FC آخر
@@ -183,33 +200,40 @@ def main():
         pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios)
         print("start retraining...")
         pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=1)
-        print("start hardening...")
         min_dict, max_dict = profile_model(pruned_model, loader, device)
 
+        print("start hardening...")
         # Hardening
         hardened_model = harden_model_pruned(pruned_model, vuln, min_dict, max_dict, ratio=Harden_ratio, pruned_idx_dict=pruned_idx_dict).to(device)
         
         # Measure performance overhead
         print("\n=== Measuring Performance Overhead ===")
         baseline_time = measure_time(model, loader, device)
-        hardened_time = measure_time(hardened_model, loader, device)
-        overhead_percent = 100 * (hardened_time - baseline_time) / baseline_time
+        hardened_base_time = measure_time(hardened_baseline, loader, device)
+        hardened_pruned_time = measure_time(hardened_model, loader, device)
+        
+        overhead_base = 100 * (hardened_base_time - baseline_time) / baseline_time
+        overhead_pruned = 100 * (hardened_pruned_time - baseline_time) / baseline_time
 
         print(f"Baseline inference time:  {baseline_time:.2f} sec")
-        print(f"Hardened inference time:  {hardened_time:.2f} sec")
-        print(f"Performance overhead (%): {overhead_percent:.2f}%")
+        print(f"Hardened baseline inference time (no pruning):  {hardened_base_time:.2f} sec")
+        print(f"Hardened pruned inference time:   {hardened_pruned_time:.2f} sec")
+        print(f"Overhead baseline (%):            {overhead_base:.2f}%")
+        print(f"Overhead pruned (%):              {overhead_pruned:.2f}%")
         
         # CSV logging 
-        csv_file = f"results/{dname}_BER_results.csv"
+        csv_file = f"results/{MODEL_NAME}_{dname}_BER_results.csv"
 
         with open(csv_file, mode='w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["BER", "Run", "Accuracy", "AccuracyDrop(%)", "Top-5", "Top-10"])
+            writer.writerow(["BER", "Run", "Accuracy(Haedened+Pruned)", "Accuracy Drop (%)", "Top5", "Top10", "Precision", "Recall", "F1 Score"])
             f.flush() #flush header immediately
             writer.writerow([])
-            writer.writerow(["Performance Overhead (%)", overhead_percent])
+            writer.writerow(["Overhead Baseline (%)", overhead_base])
+            writer.writerow(["Overhead Pruned (%)", overhead_pruned])
             writer.writerow(["Baseline Time (s)", baseline_time])
-            writer.writerow(["Hardened Time (s)", hardened_time])
+            writer.writerow(["Hardened Baseline Time (s)", hardened_base_time])
+            writer.writerow(["Hardened Time (s)", hardened_pruned_time])
             writer.writerow([])
             f.flush()
             
@@ -218,32 +242,44 @@ def main():
             top10_means, top10_stds = [], []
             acc_means, acc_stds = [], []
             drop_means, drop_stds = [], []
+            drop_baseline_means, drop_pruned_means = [], []
 
             for ber in bers:
+                drops_baseline = []
+                drops_pruned = []
                 top5_list = []
                 top10_list = []
                 acc_list = []
                 drop_percent_list = []
 
                 for run in range(n_runs):
-
-                    m = copy.deepcopy(hardened_model)
-                    inject_bitflips(m, ber)
-
-                    acc ,top5, top10 = evaluate(m, loader, device)
-                    drop_percent = 100 * (base_acc - acc)
-
-                    acc_list.append(acc)
+                    #Hardened baseline
+                    m_base = copy.deepcopy(hardened_baseline)
+                    inject_bitflips(m_base, ber)
+                    accuracy_base, _, _, _, _, _ = evaluate(m_base, loader, device)
+                    drop_base = 100 * (base_acc - accuracy_base)
+                    drops_baseline.append(drop_base)
+                    #Hardened pruned
+                    m_pruned = copy.deepcopy(hardened_model)
+                    inject_bitflips(m_pruned, ber)
+                    accuracy_pruned, top5, top10, precision, recall, f1 = evaluate(m_pruned, loader, device)
+                    drop_pruned = 100 * (base_acc - accuracy_pruned)
+                    drops_pruned.append(drop_pruned)
+                    acc_list.append(accuracy_pruned)
                     top5_list.append(top5)
                     top10_list.append(top10)
-                    drop_percent_list.append(drop_percent)
+                    drop_percent_list.append(drop_pruned)
 
-                    writer.writerow([ber, run+1, acc, drop_percent, top5, top10])
+                    writer.writerow([ber, run+1, accuracy_pruned, drop_pruned, top5, top10, precision, recall, f1])
 
                     print(f"{dname} | BER={ber} | Run={run+1} | "
-                        f"Acc={acc:.4f} | Top5={top5:.4f} | "
-                        f"Top10={top10:.4f} ")
+                        f"Acc={accuracy_pruned:.4f} | Top5={top5:.4f} | "
+                        f"Top10={top10:.4f} | F1={f1:.4f} | Drop={drop_pruned:.2f}%")
 
+                # ---- store means for plotting ----
+                drop_baseline_means.append(sum(drops_baseline) / len(drops_baseline))
+                drop_pruned_means.append(sum(drops_pruned) / len(drops_pruned))
+                
                 def mean_std(lst):
                     mean = sum(lst)/len(lst)
                     std = (sum([(a-mean)**2 for a in lst])/len(lst))**0.5
@@ -265,24 +301,27 @@ def main():
                     f"Top5 mean={m5:.4f}, "
                     f"Top10 mean={m10:.4f}, "
                     )
+    plot_baseline_vs_pruned(
+                bers,
+                drop_baseline_means,
+                drop_pruned_means,
+                MODEL_NAME,
+                dname
+            )
 
-        # Plotting
-        def plot_metric(means, stds, metric_name):
-            plt.figure()
-            plt.errorbar(bers, means, yerr=stds, fmt='-o', capsize=5)
-            plt.xscale('log')
-            plt.xlabel("Bit Error Rate (BER)")
-            plt.ylabel(metric_name)
-            plt.title(f"{MODEL_NAME} Hardened - {dname} ({metric_name})")
-            plt.grid(True)
-            plt.savefig(f"results/{dname}_{metric_name}_plot.png")
-            plt.close()
-
-
-        plot_metric(top5_means, top5_stds, "Top5")
-        plot_metric(top10_means, top10_stds, "Top10")
-        plot_metric(acc_means, acc_stds, "Accuracy")
-        plot_metric(drop_means, drop_stds, "AccuracyDrop(%)")
+    plot_single_model_metric(bers, top5_means, top5_stds, "Top5", MODEL_NAME, dname)
+    plot_single_model_metric(bers, top10_means, top10_stds, "Top10", MODEL_NAME, dname)
+    plot_single_model_metric(bers, acc_means, acc_stds, "Accuracy", MODEL_NAME, dname)
+    plot_single_model_metric(bers, drop_means, drop_stds, "AccuracyDrop(%)", MODEL_NAME, dname)
+    plot_pareto_overhead_vs_accuracy(
+        accuracy_drops=[
+            sum(drop_baseline_means) / len(drop_baseline_means),
+            sum(drop_pruned_means) / len(drop_pruned_means)
+            ],
+        overheads=[overhead_base, overhead_pruned],
+        labels=["Hardened baseline", "Hardened pruned"],
+        title=f"{MODEL_NAME} Pareto Trade-off"
+)
 
 
 if __name__ == "__main__":
