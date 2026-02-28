@@ -238,7 +238,8 @@ def main():
         
         # CSV logging 
         csv_file = f"results/{MODEL_NAME}_{dname}_BER_results.csv"
-
+        
+        print(f"\nLogging results to {csv_file}...")
         with open(csv_file, mode='w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["BER", "Run", "Accuracy(Haedened+Pruned)", "Accuracy Drop (%)", "Top5", "Top10", "Precision", "Recall", "F1 Score"])
@@ -258,7 +259,8 @@ def main():
             acc_means, acc_stds = [], []
             drop_means, drop_stds = [], []
             drop_baseline_means, drop_pruned_means = [], []
-
+            
+            print("\n=== Starting Fault Injection and Evaluation ===")
             for ber in bers:
                 drops_baseline = []
                 drops_pruned = []
@@ -266,7 +268,8 @@ def main():
                 top10_list = []
                 acc_list = []
                 drop_percent_list = []
-
+                
+                print(f"\n--- BER: {ber:.0e} ---")
                 for run in range(n_runs):
                     #Hardened baseline
                     m_base = copy.deepcopy(hardened_baseline)
