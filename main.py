@@ -46,7 +46,7 @@ def main():
     # MODEL_NAME = "vgg16"
 
     # Set device to GPU if available, else CPU
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # datasets_list = ["cifar10", "cifar100"]
     # datasets_list = ["imagenet"]
