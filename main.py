@@ -218,7 +218,8 @@ def main():
         print("start hardening...")
         # Hardening
         hardened_model = harden_model_pruned(pruned_model, vuln, min_dict, max_dict, ratio=Harden_ratio, pruned_idx_dict=pruned_idx_dict).to(device)
-        
+        clean_hardened_base_acc, _, _, _, _, _ = evaluate(hardened_baseline, loader, device)
+        clean_hardened_pruned_acc, _, _, _, _, _ = evaluate(hardened_model, loader, device)
         # Measure performance overhead
         print("\n=== Measuring Performance Overhead ===")
         timing_batches = get_timing_loader(loader, max_batches=10)
@@ -280,8 +281,8 @@ def main():
                     m_pruned = copy.deepcopy(hardened_model)
                     inject_bitflips(m_pruned, ber)
                     accuracy_pruned, top_5, top_10, precision, recall, f1 = evaluate(m_pruned, loader, device)
-                    drop_base = 100 * (base_accuracy - accuracy)
-                    drop_pruned = 100 * (base_accuracy - accuracy_pruned)
+                    drop_base = 100 * (clean_hardened_base_acc - accuracy)
+                    drop_pruned = 100 * (clean_hardened_pruned_acc - accuracy_pruned)
                     drops_baseline.append(drop_base)
                     drops_pruned.append(drop_pruned)
                     acc_list.append(accuracy_pruned)
@@ -292,7 +293,7 @@ def main():
                     writer.writerow([ber, run+1, accuracy_pruned, drop_pruned, top_5, top_10, precision, recall, f1])
 
                     print(f"{dname} | BER={ber:.0e} | Run={run+1} | "
-                        f"Acc={accuracy:.4f} | Top5={top_5:.4f} | "
+                        f"Acc={accuracy_pruned:.4f} | Top5={top_5:.4f} | "
                         f"Top10={top_10:.4f} | F1={f1:.4f} | "
                         f"Drop={drop_pruned:.2f}%")
 
