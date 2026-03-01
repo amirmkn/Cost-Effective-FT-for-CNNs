@@ -153,14 +153,14 @@ def main():
 
 
         # Baseline
-        accuracy, top_5, top_10, precision, recall, f1_score = evaluate(model, loader, device)
-        print("base_acc = ",accuracy,
-              "base_top5 = ", top_5,
-              "base_top10 = ", top_10,
-              "base_precision = " , precision,
-              "base_recall = " , recall,
-              "base_f1_score = " , f1_score,
-              )
+        base_accuracy, top_5, top_10, precision, recall, f1_score = evaluate(model, loader, device)
+        print(f"{dname} | CLEAN BASELINE | "
+            f"Accuracy={base_accuracy:.4f} | "
+            f"Top5={top_5:.4f} | "
+            f"Top10={top_10:.4f} | "
+            f"Precision={precision:.4f} | "
+            f"Recall={recall:.4f} | "
+            f"F1={f1_score:.4f}")
 
         # Vulnerability + Hardening 
         print("start analyzing...")
@@ -280,14 +280,16 @@ def main():
                     m_pruned = copy.deepcopy(hardened_model)
                     inject_bitflips(m_pruned, ber)
                     accuracy_pruned, top_5, top_10, precision, recall, f1 = evaluate(m_pruned, loader, device)
-                    drop_pruned = 100 * (accuracy - accuracy_pruned)
+                    drop_base = 100 * (base_accuracy - accuracy)
+                    drop_pruned = 100 * (base_accuracy - accuracy_pruned)
+                    drops_baseline.append(drop_base)
                     drops_pruned.append(drop_pruned)
                     acc_list.append(accuracy_pruned)
                     top5_list.append(top_5)
                     top10_list.append(top_10)
                     drop_percent_list.append(drop_pruned)
 
-                    writer.writerow([ber, run+1, accuracy, drop_pruned, top_5, top_10, precision, recall, f1])
+                    writer.writerow([ber, run+1, accuracy_pruned, drop_pruned, top_5, top_10, precision, recall, f1])
 
                     print(f"{dname} | BER={ber:.0e} | Run={run+1} | "
                         f"Acc={accuracy:.4f} | Top5={top_5:.4f} | "
