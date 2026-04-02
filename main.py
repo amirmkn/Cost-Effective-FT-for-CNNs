@@ -1,228 +1,170 @@
+import os
 import torch
+from config import *
 import torchvision.transforms as T
 import torchvision.datasets as dsets
 from torch.utils.data import DataLoader
 import copy
 import csv
-import os
-import time
-from vulnerability import VulnerabilityAnalyzer
-from fault_injection import inject_bitflips
-from evaluation import evaluate
-from model import load_resnet50, load_alexnet, load_vgg11, load_vgg16
-from hardening import harden_model, profile_model , harden_model_pruned 
-from pruning import pruning_model,lightweight_retraining, rebuild_first_fc
-from plotting import plot_single_model_metric, plot_baseline_vs_pruned, plot_pareto_overhead_vs_accuracy
+from models.model import load_resnet50, load_alexnet, load_vgg11, load_vgg16
+from methods.vulnerability import VulnerabilityAnalyzer
+from methods.fault_injection import inject_bitflips
+from methods.hardening import harden_model, profile_model , harden_model_pruned 
+from methods.pruning import pruning_model,lightweight_retraining, rebuild_first_fc
+from utils.plotting import plot_single_model_metric, plot_baseline_vs_pruned, plot_pareto_overhead_vs_accuracy
+from utils.evaluation import evaluate
+from utils.timing import measure_time, get_timing_loader
 
-def get_timing_loader(loader, max_batches=10):
-    batches = []
-    for i, batch in enumerate(loader):
-        batches.append(batch)
-        if i + 1 >= max_batches:
-            break
-    return batches
 
-def measure_time(model, timing_batches, device, runs=5):
-    model.eval()
-    times = []
-
-    with torch.no_grad():
-        for _ in range(runs):
-            start = time.time()
-            for images, labels in timing_batches:
-                images = images.to(device)
-                _ = model(images)
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            times.append(time.time() - start)
-
-    return sum(times) / len(times)
-
-def main():
-    # ================= Model selection =================
-    # MODEL_NAME = "resnet50"
-    MODEL_NAME = "alexnet"
-    # MODEL_NAME = "vgg11"
-    # MODEL_NAME = "vgg16"
-
-    # Set device to GPU if available, else CPU
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # datasets_list = ["cifar10", "cifar100"]
-    # datasets_list = ["imagenet"]
-    if MODEL_NAME == "alexnet":
-        datasets_list = ["cifar10"]
-    elif MODEL_NAME == "vgg11":
-        datasets_list = ["cifar10"]
-    elif MODEL_NAME == "vgg16":
-        datasets_list = ["cifar100"]
-    elif MODEL_NAME == "resnet50":
-        datasets_list = ["cifar10", "cifar100","tiny_imagenet"]
-    else:
-        raise ValueError("Unknown MODEL_NAME")
-
-    # bers = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4] # BERs to test
-    bers = [1e-6, 1e-5, 1e-4, 1e-3] # BERs Based on the IEEE paper
-    n_runs = 15
-    Harden_ratio = 0.15
-    
-    def get_dataset(name, max_samples = None):
-        # Set resize value based on the model being used
-        # AlexNet (CIFAR version) needs 32. ResNet50/VGG typically use 224.
-        img_size = 32 if MODEL_NAME == "alexnet" else 224
-        transform = T.Compose([T.Resize(img_size),T.ToTensor(),
-                            T.Normalize(
-                mean=[0.4914, 0.4822, 0.4465], # Using CIFAR-10 stats
-                std=[0.2023, 0.1994, 0.2010]
-            )
-        ])
-        if name.lower() == "cifar10":
-            transform = T.Compose([T.Resize(img_size),T.ToTensor(),
-                            T.Normalize(
+def get_dataset(name, train = True, max_samples = None):
+    # Set resize value based on the model being used
+    # AlexNet (CIFAR version) needs 32. ResNet50/VGG typically use 224.
+    img_size = 32 if MODEL_NAME == "alexnet" else 224
+    transform = T.Compose([T.Resize(img_size),T.ToTensor(),
+                        T.Normalize(
             mean=[0.4914, 0.4822, 0.4465], # Using CIFAR-10 stats
             std=[0.2023, 0.1994, 0.2010]
-            )
+        )
+    ])
+    if name.lower() == "cifar10":
+        transform = T.Compose([T.Resize(img_size),T.ToTensor(),
+                        T.Normalize(
+        mean=[0.4914, 0.4822, 0.4465], # Using CIFAR-10 stats
+        std=[0.2023, 0.1994, 0.2010]
+        )
+    ])
+        ds_full = dsets.CIFAR10(root="./data", train=train, download=True, transform=transform)
+        num_classes = 10
+    elif name.lower() == "cifar100":
+        transform = T.Compose([T.Resize(img_size),T.ToTensor(), 
+                        T.Normalize(
+        mean=[0.5071, 0.4867, 0.4408], # Using CIFAR-100 stats
+        std=[0.2675, 0.2565, 0.2761]
+        )
         ])
-            ds_full = dsets.CIFAR10(root="./data", train=False, download=True, transform=transform)
-            num_classes = 10
-        elif name.lower() == "cifar100":
-            transform = T.Compose([T.Resize(img_size),T.ToTensor(), 
-                            T.Normalize(
-            mean=[0.5071, 0.4867, 0.4408], # Using CIFAR-100 stats
-            std=[0.2675, 0.2565, 0.2761]
-            )
-            ])
-            ds_full = dsets.CIFAR100(root="./data", train=False, download=True, transform=transform)
-            num_classes = 100
-        elif name.lower() == "tiny_imagenet":
-            ds_full = dsets.ImageNet(root="./data/tiny-imagenet-200", split='val', download=False, transform=transform)
-            num_classes = 200
-        else:
-            raise ValueError("Unknown dataset")
-        
-        # If max_samples is None or <= 0, use the full dataset. Otherwise, create a subset.
-        if max_samples is None or max_samples <= 0:
-            ds = ds_full              
-        else:
-            ds = torch.utils.data.Subset(
-                ds_full,
-                range(min(max_samples, len(ds_full)))
-            )
+        ds_full = dsets.CIFAR100(root="./data", train=train, download=True, transform=transform)
+        num_classes = 100
+    elif name.lower() == "tiny_imagenet":
+        split = "train" if train else "val"
+        ds_full = dsets.ImageNet(root="./data/tiny-imagenet-200", split=split, download=False, transform=transform)
+        num_classes = 200
+    else:
+        raise ValueError("Unknown dataset")
+    
+    # If max_samples is None or <= 0, use the full dataset. Otherwise, create a subset.
+    if max_samples is None or max_samples <= 0:
+        ds = ds_full              
+    else:
+        ds = torch.utils.data.Subset(
+            ds_full,
+            range(min(max_samples, len(ds_full)))
+        )
 
-        loader = DataLoader(ds, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-        
-        return loader, num_classes
+    loader = DataLoader(ds, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
+    
+    return loader, num_classes
 
-    os.makedirs("results", exist_ok=True)
-
-    for dname in datasets_list:
-
-        print("\n===== DATASET:", dname, "=====")
-
-        loader, num_classes = get_dataset(dname, max_samples = None)
-
+def load_model(model_name, dataset, device):
     # Load model
-        if MODEL_NAME == "alexnet":
-            model = load_alexnet(
-                num_classes=10,
-                pth_path="./alexnet_cifar10.pth"
+    if model_name == "alexnet":
+        return load_alexnet(
+            num_classes=10,
+            pth_path=MODEL_WEIGHTS["alexnet"]
+        ).to(device)
+
+    elif model_name == "vgg11":
+        return load_vgg11(
+            num_classes=10,
+            pth_path= MODEL_WEIGHTS["vgg11"]
             ).to(device)
 
-        elif MODEL_NAME == "vgg11":
-            model = load_vgg11(
-                num_classes=10,
-                pth_path="./vgg11_cifar10.pth"
-            ).to(device)
+    elif model_name == "vgg16":
+        return load_vgg16(
+            num_classes=100,
+            pth_path=MODEL_WEIGHTS["vgg16"]
+        ).to(device)
 
-        elif MODEL_NAME == "vgg16":
-            model = load_vgg16(
-                num_classes=100,
-                pth_path="./vgg16_cifar100.pth"
-            ).to(device)
+    elif model_name == "resnet50":
 
-        elif MODEL_NAME == "resnet50":
-            pth_files = {
-                "tiny_imagenet": "./resnet50_tiny_best.pth",
-                "cifar10": "./resnet50_cifar10.pth",
-                "cifar100": "./resnet50_cifar100.pth"
-            }
-            model = load_resnet50(num_classes=num_classes,pth_path=pth_files[dname],is_tiny=(dname == "tiny_imagenet")).to(device)
+        if dataset == "cifar10":
+            path = MODEL_WEIGHTS["resnet50_cifar10"]
+            num_classes = 10
 
-        else:
-            raise ValueError("Invalid MODEL_NAME")
+        if dataset == "cifar100":
+            path = MODEL_WEIGHTS["resnet50_cifar100"]
+            num_classes = 100
 
+        if dataset == "tinyimagenet":
+            path = MODEL_WEIGHTS["resnet50_tiny"]
+            num_classes = 200
+
+        return load_resnet50(
+            num_classes=num_classes,
+            pth_path=path
+        ).to(device)
+    
+    else:
+        raise ValueError("Invalid MODEL_NAME")
+
+def main():
+
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    
+    device = DEVICE
+
+    print("Device:", device)
+
+    for dataset in DATASETS:
+
+        print("\n===== DATASET:", dataset, "=====")
+
+        train_loader, num_classes = get_dataset(dataset, train =True, max_samples = None)
+        test_loader, _ = get_dataset(dataset, train = False, max_samples= None)
+
+        model = load_model(MODEL_NAME, dataset, device)
 
         # Baseline
-        base_accuracy, top_5, top_10, precision, recall, f1_score = evaluate(model, loader, device)
-        print(f"{dname} | CLEAN BASELINE | "
-            f"Accuracy={base_accuracy:.4f} | "
-            f"Top5={top_5:.4f} | "
-            f"Top10={top_10:.4f} | "
-            f"Precision={precision:.4f} | "
-            f"Recall={recall:.4f} | "
+        base_accuracy, top_5, top_10, precision, recall, f1_score = evaluate(model, test_loader, device)
+        print(f"{dataset.upper} |CLEAN BASELINE|\n"
+            f"Accuracy={base_accuracy:.4f}|"
+            f"Top5={top_5:.4f}|"
+            f"Top10={top_10:.4f}|"
+            f"Precision={precision:.4f}|"
+            f"Recall={recall:.4f}|"
             f"F1={f1_score:.4f}")
 
         # Vulnerability + Hardening 
         print("start analyzing...")
         analyzer = VulnerabilityAnalyzer(model, device)
 
-        vuln = analyzer.analyze(loader, max_batches=30)
+        vuln = analyzer.analyze(train_loader, max_batches=30)
         # ===== Profiling original model =====
-        min_dict, max_dict = profile_model(model, loader, device)
+        min_dict, max_dict = profile_model(model, train_loader, device)
 
         print("start calculating Hardened Baseline")
-        hardened_baseline = harden_model(model,vuln,min_dict,max_dict,ratio=Harden_ratio).to(device)
+        hardened_baseline = harden_model(model, vuln, min_dict, max_dict, ratio=HARDEN_RATIO).to(device)
 
         print ("start pruning...")
-        pruning_ratios_dict = {
-            # AlexNet
-            ("alexnet", "cifar10"): {
-                "conv": [0.05]*5,   # 5 لایه کانولوشن
-                "fc":   [0.8]*3     # 3 لایه FC
-            },
-            # VGG-11
-            ("vgg11", "cifar10"): {
-                "conv": [0.04]*8,   # 8 لایه کانولوشن
-                "fc":   [0.35]*3    # 3 لایه FC
-            },
-            # VGG-16
-            ("vgg16", "cifar100"): {
-                "conv": [0.01]*13,  # 13 لایه کانولوشن
-                "fc":   [0.15]*3    # 3 لایه FC
-            },
-            # ResNet-50
-            ("resnet50", "cifar10"): {
-                "conv": [0.05]*16,  # 16 لایه کانولوشن اصلی
-                "fc":   [0.8]       # 1 لایه FC آخر
-            },
-            ("resnet50", "tiny_imagenet"): {
-                "conv": [0.02]*16,
-                "fc":   [0.10]
-            },
-            ("resnet50", "cifar100"): {
-                "conv": [0.04]*16,  # 16 لایه کانولوشن اصلی
-                "fc":   [0.35]      # 1 لایه FC آخر
-            }
-        }
-        if (MODEL_NAME, dname) in pruning_ratios_dict:
-            conv_prune_ratios = pruning_ratios_dict[(MODEL_NAME, dname)]["conv"]
-            fc_prune_ratios   = pruning_ratios_dict[(MODEL_NAME, dname)]["fc"]
+
+        if (MODEL_NAME, dataset) in PRUNING_RATIOS:
+            conv_prune_ratios = PRUNING_RATIOS[(MODEL_NAME, dataset)]["conv"]
+            fc_prune_ratios   = PRUNING_RATIOS[(MODEL_NAME, dataset)]["fc"]
 
         pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios)
         print("start retraining...")
         if MODEL_NAME in ["alexnet", "vgg11", "vgg16"]:
             pruned_model = rebuild_first_fc(pruned_model, input_size=(3,32,32), device=device)
-        pruned_model = lightweight_retraining(pruned_model, loader, device, epochs=10)
-        min_dict, max_dict = profile_model(pruned_model, loader, device)
+        pruned_model = lightweight_retraining(pruned_model, train_loader, device, epochs=10)
+        min_dict, max_dict = profile_model(pruned_model, train_loader, device)
 
         print("start hardening...")
         # Hardening
-        hardened_model = harden_model_pruned(pruned_model, vuln, min_dict, max_dict, ratio=Harden_ratio, pruned_idx_dict=pruned_idx_dict).to(device)
-        clean_hardened_base_acc, _, _, _, _, _ = evaluate(hardened_baseline, loader, device)
-        clean_hardened_pruned_acc, _, _, _, _, _ = evaluate(hardened_model, loader, device)
+        hardened_model = harden_model_pruned(pruned_model, vuln, min_dict, max_dict, ratio=HARDEN_RATIO, pruned_idx_dict=pruned_idx_dict).to(device)
+        clean_hardened_base_acc, _, _, _, _, _ = evaluate(hardened_baseline, test_loader, device)
+        clean_hardened_pruned_acc, _, _, _, _, _ = evaluate(hardened_model, test_loader, device)
         # Measure performance overhead
         print("\n=== Measuring Performance Overhead ===")
-        timing_batches = get_timing_loader(loader, max_batches=10)
+        timing_batches = get_timing_loader(train_loader, max_batches=10)
 
         baseline_time = measure_time(model, timing_batches, device)
         hardened_base_time = measure_time(hardened_baseline, timing_batches, device)
@@ -238,7 +180,7 @@ def main():
         print(f"Overhead pruned (%):              {overhead_pruned:.2f}%")
         
         # CSV logging 
-        csv_file = f"results/{MODEL_NAME}_{dname}_BER_results.csv"
+        csv_file = f"results/{MODEL_NAME}_{dataset}_BER_results.csv"
         
         print(f"\nLogging results to {csv_file}...")
         with open(csv_file, mode='w', newline='') as f:
@@ -262,7 +204,7 @@ def main():
             drop_baseline_means, drop_pruned_means = [], []
             
             print("\n=== Starting Fault Injection and Evaluation ===")
-            for ber in bers:
+            for ber in BERS:
                 drops_baseline = []
                 drops_pruned = []
                 top5_list = []
@@ -271,16 +213,16 @@ def main():
                 drop_percent_list = []
                 
                 print(f"\n--- BER: {ber:.0e} ---")
-                for run in range(n_runs):
+                for run in range(N_RUNS):
                     #Hardened baseline
                     m_base = copy.deepcopy(hardened_baseline)
                     inject_bitflips(m_base, ber)
-                    accuracy, _, _, _, _, _ = evaluate(m_base, loader, device)
+                    accuracy, _, _, _, _, _ = evaluate(m_base, test_loader, device)
                     
                     #Hardened pruned
                     m_pruned = copy.deepcopy(hardened_model)
                     inject_bitflips(m_pruned, ber)
-                    accuracy_pruned, top_5, top_10, precision, recall, f1 = evaluate(m_pruned, loader, device)
+                    accuracy_pruned, top_5, top_10, precision, recall, f1 = evaluate(m_pruned, test_loader, device)
                     drop_base = 100 * (clean_hardened_base_acc - accuracy)
                     drop_pruned = 100 * (clean_hardened_pruned_acc - accuracy_pruned)
                     drops_baseline.append(drop_base)
@@ -292,7 +234,7 @@ def main():
 
                     writer.writerow([ber, run+1, accuracy_pruned, drop_pruned, top_5, top_10, precision, recall, f1])
 
-                    print(f"{dname} | BER={ber:.0e} | Run={run+1} | "
+                    print(f"{dataset} | BER={ber:.0e} | Run={run+1} | "
                         f"Acc={accuracy_pruned:.4f} | Top5={top_5:.4f} | "
                         f"Top10={top_10:.4f} | F1={f1:.4f} | "
                         f"Drop={drop_pruned:.2f}%")
@@ -323,17 +265,17 @@ def main():
                     f"Top10 mean={m10:.4f}, "
                     )
     plot_baseline_vs_pruned(
-                bers,
+                BERS,
                 drop_baseline_means,
                 drop_pruned_means,
                 MODEL_NAME,
-                dname
+                dataset
             )
 
-    plot_single_model_metric(bers, top5_means, top5_stds, "Top5", MODEL_NAME, dname)
-    plot_single_model_metric(bers, top10_means, top10_stds, "Top10", MODEL_NAME, dname)
-    plot_single_model_metric(bers, acc_means, acc_stds, "Accuracy", MODEL_NAME, dname)
-    plot_single_model_metric(bers, drop_means, drop_stds, "AccuracyDrop(%)", MODEL_NAME, dname)
+    plot_single_model_metric(BERS, top5_means, top5_stds, "Top5", MODEL_NAME, dataset)
+    plot_single_model_metric(BERS, top10_means, top10_stds, "Top10", MODEL_NAME, dataset)
+    plot_single_model_metric(BERS, acc_means, acc_stds, "Accuracy", MODEL_NAME, dataset)
+    plot_single_model_metric(BERS, drop_means, drop_stds, "AccuracyDrop(%)", MODEL_NAME, dataset)
     plot_pareto_overhead_vs_accuracy(
         accuracy_drops=[
             sum(drop_baseline_means) / len(drop_baseline_means),
