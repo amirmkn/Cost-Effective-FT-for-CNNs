@@ -7,14 +7,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Model / Dataset selection
 
-MODEL_NAME = "alexnet" #[resnet50, vgg11, vgg16]
+MODEL_NAME = "alexnet" #[alexnet, resnet50, vgg11, vgg16]
 
 DATASETS = [
     "cifar10"
 ] #["cifar10", "cifar100","tiny_imagenet"]
 
-train_sample_number = 10
-test_sample_number = 50
+train_sample_number = 2000
+test_sample_number = 400
 
 # Experiment parameters
 # BERS = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4] # BERs to test

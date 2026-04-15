@@ -4,7 +4,7 @@ import torch.optim as optim
 import copy
 from torchvision.models.resnet import BasicBlock, Bottleneck
 
-# ================= Utility =================
+# Utility 
 def rebuild_first_fc(model, input_size=(3, 32, 32), device='cuda'):
         model.eval()
         with torch.no_grad():
@@ -17,6 +17,47 @@ def rebuild_first_fc(model, input_size=(3, 32, 32), device='cuda'):
 
         model.classifier[0] = new_fc
         return model
+
+def rebuild_first_fc(model, input_size=(3, 32, 32), device=None):
+    # auto device
+    if device is None:
+        device = next(model.parameters()).device
+    if str(device) == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+
+    model.eval()
+    model = model.to(device)
+
+    # 1) get new conv flattened size
+    with torch.no_grad():
+        dummy = torch.zeros(1, *input_size).to(device)
+        flat_dim = model.features(dummy).view(1, -1).size(1)
+
+    # 2) find the FIRST Linear layer inside classifier
+    first_fc_name = None
+    for name, module in model.classifier.named_modules():
+        if isinstance(module, nn.Linear):
+            first_fc_name = name
+            break
+
+    if first_fc_name is None:
+        raise RuntimeError("No Linear layer found in model.classifier!")
+
+    # NOTE: name may be nested (e.g. '1' or 'block.0')
+    parent = model.classifier
+    for part in first_fc_name.split('.')[:-1]:
+        parent = parent[int(part)]
+    key = first_fc_name.split('.')[-1]
+    if key.isdigit():
+        key = int(key)
+
+    old_fc = parent[key]
+
+    # 3) rebuild FC to match new input size
+    new_fc = nn.Linear(flat_dim, old_fc.out_features).to(device)
+
+    parent[key] = new_fc
+    return model
 
 def get_parent(model, name):
     components = name.split(".")
@@ -72,11 +113,28 @@ def prune_bn_for_conv(model, conv_name, keep_idx):
         new_bn.momentum = bn.momentum
         setattr(parent, child_name, new_bn)
         
-# ================= Pruning Function =================
-def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios):
+def prune_linear(fc_layer, keep_out_idx, keep_in_idx=None):
+    if keep_in_idx is None:
+        keep_in_idx = list(range(fc_layer.in_features))
+
+    new_fc = nn.Linear(
+        in_features=len(keep_in_idx),
+        out_features=len(keep_out_idx),
+        bias=(fc_layer.bias is not None)
+    )
+
+    new_fc.weight.data = fc_layer.weight.data[keep_out_idx][:, keep_in_idx].clone()
+
+    if fc_layer.bias is not None:
+        new_fc.bias.data = fc_layer.bias.data[keep_out_idx].clone()
+
+    return new_fc
+# Pruning Function
+def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios, device):
     model = copy.deepcopy(model)
     pruned_idx_dict = {}
     conv_idx, fc_idx = 0, 0
+    prev_keep_idx = None
     is_resnet = any(isinstance(m, (BasicBlock, Bottleneck)) for m in model.modules())
 
     if is_resnet:
@@ -126,6 +184,7 @@ def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios):
         # AlexNet / VGG
         prev_keep_idx = None
         for name, module in model.named_modules():
+            #CONV PRUNING
             if isinstance(module, nn.Conv2d):
                 scores = torch.tensor(vuln_dict[name]["scores"])
                 prune_ratio = conv_prune_ratios[min(conv_idx, len(conv_prune_ratios)-1)]
@@ -147,34 +206,67 @@ def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios):
                 prune_bn_for_conv(model, name, keep_idx)
                 prev_keep_idx = keep_idx
                 pruned_idx_dict[name] = keep_idx
+            # 2) REBUILD FIRST FC TO MATCH NEW CONV OUTPUT SIZE
+        model = rebuild_first_fc(model, input_size=(3,32,32), device=device)
 
-            # elif isinstance(module, nn.Linear):
-            #     scores = torch.tensor(vuln_dict[name]["scores"])
-            #     prune_ratio = fc_prune_ratios[min(fc_idx, len(fc_prune_ratios)-1)]
-            #     keep_k = max(1, int(len(scores)*(1-prune_ratio)))
-            #     keep_idx = torch.topk(scores, keep_k).indices.tolist()
-            #     fc_idx += 1
+        # ----- FC PRUNING -----
+        prev_keep_idx = None
+        fc_layers = list(model.classifier.named_modules())
 
-            #     parent = get_parent(model, name)
-            #     child_name = name.split('.')[-1]
+        for name, module in model.classifier.named_modules():
+            # Only direct children (avoid nested)
+            if not isinstance(module, nn.Linear):
+                continue
 
-            #     in_features = module.in_features if prev_keep_idx is None else len(prev_keep_idx)
-            #     new_fc = nn.Linear(in_features, len(keep_idx), bias=(module.bias is not None))
-            #     if prev_keep_idx is None:
-            #         new_fc.weight.data = module.weight.data[keep_idx].clone()
-            #     else:
-            #         new_fc.weight.data = module.weight.data[keep_idx][:, prev_keep_idx].clone()
-            #     if module.bias is not None:
-            #         new_fc.bias.data = module.bias.data[keep_idx].clone()
-            #     setattr(parent, child_name, new_fc)
-            #     pruned_idx_dict[name] = keep_idx
+            # detect last FC
+            is_last_fc = (module is model.classifier[-1])
+
+            if is_last_fc:
+                # Do NOT prune last FC output, but DO prune input later
+                continue
+
+            scores = torch.tensor(vuln_dict[f"classifier.{name}"]["scores"])
+            prune_ratio = fc_prune_ratios[min(fc_idx, len(fc_prune_ratios)-1)]
+
+            keep_k = max(1, int(len(scores)*(1-prune_ratio)))
+            keep_idx = torch.topk(scores, keep_k).indices.tolist()
+            fc_idx += 1
+
+            parent = model.classifier
+            key = int(name)
+
+            if prev_keep_idx is None:
+                keep_in_idx = list(range(module.in_features))
+            else:
+                keep_in_idx = [i for i in prev_keep_idx if i < module.in_features]
+
+            new_fc = prune_linear(module, keep_idx, keep_in_idx)
+            parent[key] = new_fc
+
+            prev_keep_idx = keep_idx
+
+        # FIX FINAL FC
+        last_fc = model.classifier[-1]
+        correct_in = len(prev_keep_idx)
+        correct_out = last_fc.out_features
+
+        new_last_fc = nn.Linear(correct_in, correct_out)
+        new_last_fc.weight.data = last_fc.weight.data[:, prev_keep_idx].clone()
+        new_last_fc.bias.data = last_fc.bias.data.clone()
+
+        model.classifier[-1] = new_last_fc
 
         return model, pruned_idx_dict
-# ================= Lightweight Retraining =================
+
+# Lightweight Retraining
 def lightweight_retraining(model, train_loader, device='cuda', epochs=10, lr=0.001):
     model = model.to(device)
     model.train()
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    is_resnet = any(isinstance(m, (BasicBlock, Bottleneck)) for m in model.modules())
+    if is_resnet:
+        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
+    else:
+        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     criterion = nn.CrossEntropyLoss()
 
     for epoch in range(epochs):

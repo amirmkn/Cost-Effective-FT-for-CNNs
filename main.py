@@ -118,14 +118,14 @@ def main():
 
         print("\n===== DATASET:", dataset, "=====")
 
-        train_loader, num_classes = get_dataset(dataset, train =True, max_samples = None)
-        test_loader, _ = get_dataset(dataset, train = False, max_samples= None)
+        train_loader, num_classes = get_dataset(dataset, train =True, max_samples = train_sample_number)
+        test_loader, _ = get_dataset(dataset, train = False, max_samples= test_sample_number)
 
         model = load_model(MODEL_NAME, dataset, device)
 
         # Baseline
         base_accuracy, top_5, top_10, precision, recall, f1_score = evaluate(model, test_loader, device)
-        print(f"{dataset.upper} |CLEAN BASELINE|\n"
+        print(f"{dataset.upper()} |CLEAN BASELINE|\n"
             f"Accuracy={base_accuracy:.4f}|"
             f"Top5={top_5:.4f}|"
             f"Top10={top_10:.4f}|"
@@ -134,36 +134,54 @@ def main():
             f"F1={f1_score:.4f}")
 
         # Vulnerability + Hardening 
-        print("start analyzing...")
+        print("Analyzing...")
         analyzer = VulnerabilityAnalyzer(model, device)
 
         vuln = analyzer.analyze(train_loader, max_batches=30)
         # ===== Profiling original model =====
         min_dict, max_dict = profile_model(model, train_loader, device)
 
-        print("start calculating Hardened Baseline")
+        print("Calculating Hardened Baseline")
         hardened_baseline = harden_model(model, vuln, min_dict, max_dict, ratio=HARDEN_RATIO).to(device)
 
-        print ("start pruning...")
+        print ("Prunning...")
 
         if (MODEL_NAME, dataset) in PRUNING_RATIOS:
             conv_prune_ratios = PRUNING_RATIOS[(MODEL_NAME, dataset)]["conv"]
             fc_prune_ratios   = PRUNING_RATIOS[(MODEL_NAME, dataset)]["fc"]
 
-        pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios)
-        print("start retraining...")
-        if MODEL_NAME in ["alexnet", "vgg11", "vgg16"]:
-            pruned_model = rebuild_first_fc(pruned_model, input_size=(3,32,32), device=device)
+        pruned_model , pruned_idx_dict = pruning_model(model, vuln, conv_prune_ratios, fc_prune_ratios, device)
+        postprune_accuracy, pp_top_5, pp_top_10, pp_precision, pp_recall, pp_f1_score = evaluate(pruned_model, test_loader, device)
+        print(f"{dataset.upper()} |Stats After Pruning|\n"
+            f"Accuracy={postprune_accuracy:.4f}|"
+            f"Top5={pp_top_5:.4f}|"
+            f"Top10={pp_top_10:.4f}|"
+            f"Precision={pp_precision:.4f}|"
+            f"Recall={pp_recall:.4f}|"
+            f"F1={pp_f1_score:.4f}")
+        
+        print("Retraining...")
+        # if MODEL_NAME in ["alexnet", "vgg11", "vgg16"]:
+        #     pruned_model = rebuild_first_fc(pruned_model, input_size=(3,32,32), device=device)
         pruned_model = lightweight_retraining(pruned_model, train_loader, device, epochs=10)
+        retrain_accuracy, retrain_top_5, retrain_top_10, retrain_precision, retrain_recall, retrain_f1_score = evaluate(pruned_model, test_loader, device)
+        print(f"{dataset.upper()} |Stats After Pruning|\n"
+            f"Accuracy={retrain_accuracy:.4f}|"
+            f"Top5={retrain_top_5:.4f}|"
+            f"Top10={retrain_top_10:.4f}|"
+            f"Precision={retrain_precision:.4f}|"
+            f"Recall={retrain_recall:.4f}|"
+            f"F1={retrain_f1_score:.4f}")
+        
+        print("Hardenning...")
         min_dict, max_dict = profile_model(pruned_model, train_loader, device)
 
-        print("start hardening...")
         # Hardening
         hardened_model = harden_model_pruned(pruned_model, vuln, min_dict, max_dict, ratio=HARDEN_RATIO, pruned_idx_dict=pruned_idx_dict).to(device)
         clean_hardened_base_acc, _, _, _, _, _ = evaluate(hardened_baseline, test_loader, device)
         clean_hardened_pruned_acc, _, _, _, _, _ = evaluate(hardened_model, test_loader, device)
         # Measure performance overhead
-        print("\n=== Measuring Performance Overhead ===")
+        print("\nMeasuring Performance Overhead")
         timing_batches = get_timing_loader(train_loader, max_batches=10)
 
         baseline_time = measure_time(model, timing_batches, device)
@@ -269,13 +287,14 @@ def main():
                 drop_baseline_means,
                 drop_pruned_means,
                 MODEL_NAME,
-                dataset
+                dataset,
+                RESULTS_DIR
             )
 
-    plot_single_model_metric(BERS, top5_means, top5_stds, "Top5", MODEL_NAME, dataset)
-    plot_single_model_metric(BERS, top10_means, top10_stds, "Top10", MODEL_NAME, dataset)
-    plot_single_model_metric(BERS, acc_means, acc_stds, "Accuracy", MODEL_NAME, dataset)
-    plot_single_model_metric(BERS, drop_means, drop_stds, "AccuracyDrop(%)", MODEL_NAME, dataset)
+    plot_single_model_metric(BERS, top5_means, top5_stds, "Top5", MODEL_NAME, dataset, RESULTS_DIR)
+    plot_single_model_metric(BERS, top10_means, top10_stds, "Top10", MODEL_NAME, dataset, RESULTS_DIR)
+    plot_single_model_metric(BERS, acc_means, acc_stds, "Accuracy", MODEL_NAME, dataset, RESULTS_DIR)
+    plot_single_model_metric(BERS, drop_means, drop_stds, "AccuracyDrop(%)", MODEL_NAME, dataset, RESULTS_DIR)
     plot_pareto_overhead_vs_accuracy(
         accuracy_drops=[
             sum(drop_baseline_means) / len(drop_baseline_means),
