@@ -7,7 +7,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Model / Dataset selection
 
-MODEL_NAME = "alexnet" #[alexnet, resnet50, vgg11, vgg16]
+MODEL_NAME = "resnet50" #[alexnet, resnet50, vgg11, vgg16]
 
 DATASETS = [
     "cifar10"

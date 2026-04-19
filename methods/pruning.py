@@ -98,7 +98,7 @@ def prune_bn_for_conv(model, conv_name, keep_idx):
         new_bn.eps = bn.eps
         new_bn.momentum = bn.momentum
         setattr(parent, child_name, new_bn)
-        
+
 def prune_linear(fc_layer, keep_out_idx, keep_in_idx=None):
     if keep_in_idx is None:
         keep_in_idx = list(range(fc_layer.in_features))
@@ -124,46 +124,139 @@ def pruning_model(model, vuln_dict, conv_prune_ratios, fc_prune_ratios, device):
     is_resnet = any(isinstance(m, (BasicBlock, Bottleneck)) for m in model.modules())
 
     if is_resnet:
-        prev_keep_idx = list(range(model.conv1.out_channels))
-        for layer_name in ["layer1","layer2","layer3","layer4"]:
+        print("\n" + "="*60)
+        print("Starting ResNet model pruning")
+        print("="*60)
+
+        # ========== 1) Prune first conv and bn ==========
+        if hasattr(model, 'conv1') and isinstance(model.conv1, nn.Conv2d):
+            print("\n[STEP 1] Pruning conv1 and bn1")
+            old_out_channels = model.conv1.out_channels
+            old_in_channels = model.conv1.in_channels
+            print(f"  Before pruning - conv1: in={old_in_channels}, out={old_out_channels}")
+
+            scores = torch.tensor(vuln_dict['conv1']["scores"])
+            prune_ratio = conv_prune_ratios[0] if conv_prune_ratios else 0.5
+            keep_k = max(1, int(len(scores) * (1 - prune_ratio)))
+            keep_idx_conv1 = torch.topk(scores, keep_k).indices.tolist()
+            print(f"  Prune ratio: {prune_ratio:.2f} -> kept channels: {len(keep_idx_conv1)} out of {old_out_channels}")
+
+            model.conv1 = prune_conv(model.conv1, keep_idx_conv1, None)
+            print(f"  After pruning - conv1: in={model.conv1.in_channels}, out={model.conv1.out_channels}")
+
+            if hasattr(model, 'bn1') and isinstance(model.bn1, nn.BatchNorm2d):
+                old_bn_features = model.bn1.num_features
+                model.bn1 = prune_bn(model.bn1, keep_idx_conv1)
+                print(f"  After pruning - bn1: num_features = {model.bn1.num_features} (was {old_bn_features})")
+
+            prev_keep_idx = keep_idx_conv1
+            pruned_idx_dict['conv1'] = keep_idx_conv1
+
+        # ========== 2) Prune residual layers ==========
+        for layer_name in ["layer1", "layer2", "layer3", "layer4"]:
+            print(f"\n[LAYER] {layer_name}")
             layer = getattr(model, layer_name)
             for block_idx, block in enumerate(layer):
                 block_prefix = f"{layer_name}.{block_idx}"
+                is_bottleneck = isinstance(block, Bottleneck)
+                print(f"\n  Block {block_prefix} ({'Bottleneck' if is_bottleneck else 'BasicBlock'})")
+                print(f"    Block input (prev_keep_idx) = {len(prev_keep_idx)} channels")
 
-                # conv1
+                # -------------- conv1 --------------
                 conv_name = block_prefix + ".conv1"
+                print(f"\n    --- conv1 ({conv_name}) ---")
+                old_conv = block.conv1
+                print(f"      Before pruning: in={old_conv.in_channels}, out={old_conv.out_channels}")
+
                 scores = torch.tensor(vuln_dict[conv_name]["scores"])
-                keep_out_idx1 = torch.topk(scores, max(1,int(len(scores)*(1-conv_prune_ratios[0])))).indices.tolist()
+                keep_out_idx1 = torch.topk(scores, max(1, int(len(scores)*(1-conv_prune_ratios[0])))).indices.tolist()
+                print(f"      Prune ratio = {conv_prune_ratios[0]:.2f} -> keeping {len(keep_out_idx1)} out of {len(scores)} output channels")
+
                 block.conv1 = prune_conv(block.conv1, keep_out_idx1, prev_keep_idx)
+                print(f"      After pruning: in={block.conv1.in_channels}, out={block.conv1.out_channels}")
+
                 block.bn1 = prune_bn(block.bn1, keep_out_idx1)
+                print(f"      bn1 pruned: num_features = {block.bn1.num_features}")
 
-                # conv2
+                # -------------- conv2 --------------
                 conv_name = block_prefix + ".conv2"
+                print(f"\n    --- conv2 ({conv_name}) ---")
+                old_conv = block.conv2
+                print(f"      Before pruning: in={old_conv.in_channels}, out={old_conv.out_channels}")
+
                 scores = torch.tensor(vuln_dict[conv_name]["scores"])
-                keep_out_idx2 = torch.topk(scores, max(1,int(len(scores)*(1-conv_prune_ratios[1])))).indices.tolist()
+                keep_out_idx2 = torch.topk(scores, max(1, int(len(scores)*(1-conv_prune_ratios[1])))).indices.tolist()
+                print(f"      Prune ratio = {conv_prune_ratios[1]:.2f} -> keeping {len(keep_out_idx2)} out of {len(scores)} output channels")
+
                 block.conv2 = prune_conv(block.conv2, keep_out_idx2, keep_out_idx1)
+                print(f"      After pruning: in={block.conv2.in_channels}, out={block.conv2.out_channels}")
+
                 block.bn2 = prune_bn(block.bn2, keep_out_idx2)
+                print(f"      bn2 pruned: num_features = {block.bn2.num_features}")
 
-                # conv3
-                conv_name = block_prefix + ".conv3"
-                scores = torch.tensor(vuln_dict[conv_name]["scores"])
-                keep_out_idx3 = torch.topk(scores, max(1,int(len(scores)*(1-conv_prune_ratios[2])))).indices.tolist()
-                block.conv3 = prune_conv(block.conv3, keep_out_idx3, keep_out_idx2)
-                block.bn3 = prune_bn(block.bn3, keep_out_idx3)
+                # -------------- conv3 (only for Bottleneck) --------------
+                if is_bottleneck:
+                    conv_name = block_prefix + ".conv3"
+                    print(f"\n    --- conv3 ({conv_name}) ---")
+                    old_conv = block.conv3
+                    print(f"      Before pruning: in={old_conv.in_channels}, out={old_conv.out_channels}")
 
-                # downsample
+                    scores = torch.tensor(vuln_dict[conv_name]["scores"])
+                    has_downsample = (block.downsample is not None)
+                    if has_downsample:
+                        keep_k = max(1, int(len(scores)*(1-conv_prune_ratios[2])))
+                        print(f"      Has downsample -> prune ratio = {conv_prune_ratios[2]:.2f}")
+                    else:
+                        keep_k = len(prev_keep_idx)
+                        if keep_k > len(scores):
+                            keep_k = len(scores)
+                        print(f"      No downsample -> output channels must match block input: {keep_k} channels")
+
+                    keep_out_idx3 = torch.topk(scores, keep_k).indices.tolist()
+                    print(f"      Keeping {len(keep_out_idx3)} out of {len(scores)} output channels")
+
+                    block.conv3 = prune_conv(block.conv3, keep_out_idx3, keep_out_idx2)
+                    print(f"      After pruning: in={block.conv3.in_channels}, out={block.conv3.out_channels}")
+
+                    block.bn3 = prune_bn(block.bn3, keep_out_idx3)
+                    print(f"      bn3 pruned: num_features = {block.bn3.num_features}")
+                else:
+                    # BasicBlock: conv2 is the final output
+                    keep_out_idx3 = keep_out_idx2
+                    print(f"\n    (BasicBlock - conv2 used as final output)")
+
+                # -------------- downsample --------------
                 if block.downsample is not None:
+                    print(f"\n    --- downsample ---")
                     ds_conv = block.downsample[0]
                     ds_bn = block.downsample[1]
+                    print(f"      Before pruning - downsample conv: in={ds_conv.in_channels}, out={ds_conv.out_channels}")
+                    print(f"      Before pruning - downsample bn: features={ds_bn.num_features}")
+
                     block.downsample[0] = prune_conv(ds_conv, keep_out_idx3, prev_keep_idx)
                     block.downsample[1] = prune_bn(ds_bn, keep_out_idx3)
 
+                    print(f"      After pruning - downsample conv: in={block.downsample[0].in_channels}, out={block.downsample[0].out_channels}")
+                    print(f"      After pruning - downsample bn: features={block.downsample[1].num_features}")
+
                 prev_keep_idx = keep_out_idx3
                 pruned_idx_dict[block_prefix] = keep_out_idx3
+                print(f"    Block output: {len(prev_keep_idx)} channels (will be input to next block)")
 
-        # final FC
+        # ========== 3) Prune final fully connected layer ==========
+        print("\n[STEP 3] Pruning final fully connected layer (fc)")
         old_fc = model.fc
-        model.fc = nn.Linear(len(prev_keep_idx), old_fc.out_features)
+        print(f"  Before pruning - fc: in_features={old_fc.in_features}, out_features={old_fc.out_features}")
+        new_fc = nn.Linear(len(prev_keep_idx), old_fc.out_features)
+        new_fc.weight.data = old_fc.weight.data[:, prev_keep_idx].clone()
+        new_fc.bias.data = old_fc.bias.data.clone()
+        model.fc = new_fc
+        print(f"  After pruning - fc: in_features={model.fc.in_features}, out_features={model.fc.out_features}")
+
+        print("\n" + "="*60)
+        print("ResNet pruning completed successfully")
+        print("="*60 + "\n")
+
         return model, pruned_idx_dict
 
     else:
