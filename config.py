@@ -10,7 +10,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_NAME = "resnet50" #[alexnet, resnet50, vgg11, vgg16]
 
 DATASETS = [
-    "cifar10"
+    "cifar10","cifar100"
 ] #["cifar10", "cifar100","tiny_imagenet"]
 
 train_sample_number = 2000

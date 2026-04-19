@@ -92,13 +92,13 @@ for epoch in range(10):
 
     if test_acc > best_acc:
         best_acc = test_acc
-        torch.save(model.state_dict(), "alexnet_cifar10_best.pth")
+        torch.save(model.state_dict(), "../weights/alexnet_cifar10_best.pth")
         print(f"✨ New best model saved with {best_acc:.2f}% accuracy")
 
     if test_acc >= target_accuracy:
         print(f"🎯 Target accuracy {target_accuracy}% reached!")
 
-torch.save(model.state_dict(), "weights/alexnet_cifar10_final.pth")
+torch.save(model.state_dict(), "../weights/alexnet_cifar10_final.pth")
 print("✅ Training Finished. Final model saved.")
 
 # Plotting Accuracy and Loss

@@ -43,7 +43,7 @@ def main():
     #  Model 
     model = resnet50(weights=None)
 
-    state_dict = torch.load("weights/resnet50.pth", map_location=device)
+    state_dict = torch.load("../weights/resnet50.pth", map_location=device)
 
     # Remove original classifier weights
     state_dict.pop("fc.weight", None)
