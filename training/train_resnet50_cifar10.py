@@ -6,6 +6,7 @@ from torchvision.models import resnet50
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
+import os
 
 
 def main():
@@ -37,16 +38,22 @@ def main():
     trainloader = DataLoader(trainset, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
     testloader = DataLoader(testset, batch_size=64, shuffle=False, num_workers=8, pin_memory=True)
 
-    # Model
+    weights_path = "./weights/resnet50.pth"
     model = resnet50(weights=None)
-    state_dict = torch.load("./weights/resnet50.pth", map_location=device)
 
-    # Remove classifier weights
-    state_dict.pop("fc.weight", None)
-    state_dict.pop("fc.bias", None)
+    if os.path.exists(weights_path):
+        print(f"Loading local weights from: {weights_path}")
+        state_dict = torch.load(weights_path, map_location=device)
 
-    model.load_state_dict(state_dict, strict=False)
-    model.fc = nn.Linear(model.fc.in_features, 10)
+        state_dict.pop("fc.weight", None)
+        state_dict.pop("fc.bias", None)
+
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        print("Local weights not found. Initializing ResNet50 with random weights.")
+
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, 10)
     model = model.to(device)
 
     # Optimizer & Loss
@@ -117,13 +124,10 @@ def main():
     # Final Accuracy
     print("\nFinal CIFAR-10 Test Accuracy:", test_acc_history[-1])
 
-    # SAVE MODEL
+    os.makedirs("./weights", exist_ok=True)
     torch.save(model.state_dict(), "./weights/resnet50_cifar10.pth")
 
-
     # PLOTTING
-
-    # Accuracy Plot
     plt.figure(figsize=(10, 5))
     plt.plot(epochs_range, train_acc_history, label='Train Accuracy', color='blue')
     plt.plot(epochs_range, test_acc_history, label='Test Accuracy', color='red')
@@ -135,7 +139,6 @@ def main():
     plt.savefig('accuracy_plot.png')
     plt.show()
 
-    # Loss Plot
     plt.figure(figsize=(10, 5))
     plt.plot(epochs_range, loss_history, label='Training Loss', color='orange')
     plt.title('ResNet50 CIFAR-10 Training Loss')

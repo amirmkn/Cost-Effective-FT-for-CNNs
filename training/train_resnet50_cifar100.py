@@ -6,6 +6,7 @@ from torchvision.models import resnet50
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
+import os 
 
 
 def main():
@@ -40,16 +41,19 @@ def main():
     trainloader = DataLoader(trainset, batch_size=16, shuffle=True, num_workers=2)
     testloader = DataLoader(testset, batch_size=16, shuffle=False, num_workers=2)
 
-    #  Model 
+    weights_path = "./weights/resnet50.pth"
     model = resnet50(weights=None)
 
-    state_dict = torch.load("./weights/resnet50.pth", map_location=device)
+    if os.path.exists(weights_path):
+        print(f"Loading local weights from: {weights_path}")
+        state_dict = torch.load(weights_path, map_location=device)
 
-    # Remove original classifier weights
-    state_dict.pop("fc.weight", None)
-    state_dict.pop("fc.bias", None)
+        state_dict.pop("fc.weight", None)
+        state_dict.pop("fc.bias", None)
 
-    model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        print("Local weights not found. Initializing ResNet50 with random weights.")
 
     # Replace classifier for CIFAR100
     model.fc = nn.Linear(model.fc.in_features, 100)
@@ -136,9 +140,7 @@ def main():
     #  Save model 
     torch.save(model.state_dict(), "./weights/resnet50_cifar100.pth")
 
-    # =========
-    # ====     PLOTS     =======
-    # =========
+    # PLOTS     
 
     # Accuracy Plot
     plt.figure(figsize=(10, 5))
