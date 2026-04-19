@@ -43,7 +43,7 @@ def main():
     #  Model 
     model = resnet50(weights=None)
 
-    state_dict = torch.load("../weights/resnet50.pth", map_location=device)
+    state_dict = torch.load("./weights/resnet50.pth", map_location=device)
 
     # Remove original classifier weights
     state_dict.pop("fc.weight", None)
@@ -134,7 +134,7 @@ def main():
     print("\nFinal CIFAR‑100 Test Accuracy:", test_acc_history[-1])
 
     #  Save model 
-    torch.save(model.state_dict(), "../weights/resnet50_cifar100.pth")
+    torch.save(model.state_dict(), "./weights/resnet50_cifar100.pth")
 
     # =========
     # ====     PLOTS     =======
