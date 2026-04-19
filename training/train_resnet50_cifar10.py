@@ -118,7 +118,7 @@ def main():
     print("\nFinal CIFAR-10 Test Accuracy:", test_acc_history[-1])
 
     # SAVE MODEL
-    torch.save(model.state_dict(), "weights/resnet50_cifar10.pth")
+    torch.save(model.state_dict(), "../weights/resnet50_cifar10.pth")
 
 
     # PLOTTING

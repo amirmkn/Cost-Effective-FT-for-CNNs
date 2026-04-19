@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from torchvision.models import alexnet
+from torchvision.models import alexnet, ResNet50_Weights
 
 class AlexNetCIFAR(nn.Module):
     def __init__(self, num_classes=10):
@@ -41,12 +41,6 @@ class AlexNetCIFAR(nn.Module):
         x = self.features(x)
         x = x.view(x.size(0), -1)
         return self.classifier(x)
-
-
-import torch
-import torch.nn as nn
-import torchvision.models as models
-from torchvision.models import ResNet50_Weights
 
 def load_resnet50(num_classes=None, pth_path=None, is_tiny=False):
     """

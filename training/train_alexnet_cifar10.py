@@ -4,7 +4,7 @@ import torch.optim as optim
 import torchvision.datasets as dsets
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
-from model import load_alexnet
+from models.model import load_alexnet
 import matplotlib.pyplot as plt
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -98,7 +98,7 @@ for epoch in range(10):
     if test_acc >= target_accuracy:
         print(f"🎯 Target accuracy {target_accuracy}% reached!")
 
-torch.save(model.state_dict(), "alexnet_cifar10_final.pth")
+torch.save(model.state_dict(), "weights/alexnet_cifar10_final.pth")
 print("✅ Training Finished. Final model saved.")
 
 # Plotting Accuracy and Loss
