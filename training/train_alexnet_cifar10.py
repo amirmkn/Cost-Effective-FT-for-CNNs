@@ -65,7 +65,7 @@ loss_history = []
 
 print("Starting Training...")
 
-for epoch in range(90):
+for epoch in range(10):
     model.train()
     running_loss = 0.0
     for x, y in train_loader:
