@@ -87,18 +87,15 @@ def load_model(model_name, dataset, device):
     elif model_name == "resnet50":
 
         if dataset == "cifar10":
-            # path = MODEL_WEIGHTS["resnet50_cifar10"]
-            path = "/kaggle/input/models/amirmkn/resnet50-cifar10/pytorch/default/1"
+            path = MODEL_WEIGHTS["resnet50_cifar10"]
             num_classes = 10
 
         if dataset == "cifar100":
-            # path = MODEL_WEIGHTS["resnet50_cifar100"]
-            path = "/kaggle/input/models/amirmkn/resnet50-cifar100/pytorch/default/1"
+            path = MODEL_WEIGHTS["resnet50_cifar100"]
             num_classes = 100
 
         if dataset == "tinyimagenet":
-            # path = MODEL_WEIGHTS["resnet50_tiny"]
-            path = "/kaggle/input/datasets/amirmkn/resnet-tiny-imagenet/resnet50_tiny_best.pth"
+            path = MODEL_WEIGHTS["resnet50_tiny"]
             num_classes = 200
 
         return load_resnet50(

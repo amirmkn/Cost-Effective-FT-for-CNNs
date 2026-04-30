@@ -10,7 +10,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_NAME = "resnet50" #[alexnet, resnet50, vgg11, vgg16]
 
 DATASETS = [
-    "cifar10","cifar100","tiny_imagenet"
+    "cifar10","cifar100"
 ] #["cifar10", "cifar100","tiny_imagenet"]
 
 train_sample_number = 2000
@@ -20,7 +20,7 @@ test_sample_number = 400
 # BERS = [5e-6, 1e-5, 5e-5, 1e-4, 5e-4] # BERs to test
 BERS = [1e-8,5e-8,1e-7,5e-7,1e-6,5e-6,1e-5,5e-5,1e-4,5e-4]
 
-N_RUNS = 5
+N_RUNS = 1
 HARDEN_RATIO = 0.15
 # Pruning
 PRUNING_RATIOS = {
@@ -41,7 +41,7 @@ PRUNING_RATIOS = {
     },
     # ResNet-50
     ("resnet50", "cifar10"): {
-        "conv": [0.09]*16,  # 16 Main Convolution Layers 
+        "conv": [0.02]*16,  # 16 Main Convolution Layers 
         "fc":   [0.7]       # 1 Last FC Layer 
     },
     ("resnet50", "tiny_imagenet"): {
